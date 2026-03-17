@@ -90,6 +90,7 @@ def _get_driver():
     if _DRIVER is not None and _is_driver_alive(_DRIVER):
         return _DRIVER
     _DRIVER = _init_driver()
+    _warmup(_DRIVER)   # yangi driver ochilganda bir marta warmup
     return _DRIVER
 
 
@@ -230,26 +231,56 @@ def _open_details_modal(driver, row_el, layout: str | None) -> bool:
     return False
 
 
-def _youtube_warmup(driver):
+# Warmup uchun saytlar zanjiri: biri ishlamasa keyingisi uriniladi
+_WARMUP_SITES = [
+    # (url, CSS selector, qidiruv so'z)
+    ("https://www.google.com",    "input[name='q']", "python tutorial"),
+    ("https://www.wikipedia.org", "#searchInput",    "python"),
+    ("https://duckduckgo.com",    "input[name='q']", "python tutorial"),
+]
+
+
+def _warmup(driver) -> bool:
     """
-    Oldingi kabi warmup — sayt anti-botni biroz aldash uchun.
+    Cloudflare bot-detection'ni aldash uchun oddiy saytlarda qisqa faoliyat ko'rsatadi.
+
+    YouTube o'rniga ishonchli muqobillar zanjiri:
+      Google → Wikipedia → DuckDuckGo
+    Biri xato bersа keyingisiga o'tadi.
+    Hammasi ishlamasa ham bot o'lmaydi — xato log qilinib davom etadi.
+
+    SKIP_WARMUP=true bo'lsa butunlay o'tkazib yuboradi.
     """
-    try:
-        print("[kochirish_html] YouTube warmup...")
-        wait = WebDriverWait(driver, 30)
-        driver.get("https://www.youtube.com")
-        wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-        box = wait.until(EC.presence_of_element_located((By.NAME, "search_query")))
-        box.click()
-        _human_delay(0.5, 1.0)
-        box.send_keys("python tutorial")
-        _human_delay(0.5, 1.0)
-        box.send_keys(Keys.ENTER)
-        wait.until(EC.presence_of_element_located((By.ID, "contents")))
-        _human_delay(1.5, 2.5)
-        print("[kochirish_html] YouTube warmup tugadi")
-    except Exception as e:
-        print(f"[kochirish_html] YouTube warmup xato: {e}")
+    if _env_bool("SKIP_WARMUP", default=False):
+        print("[warmup] SKIP_WARMUP=true — o'tkazildi")
+        return True
+
+    for url, selector, query in _WARMUP_SITES:
+        try:
+            print(f"[warmup] {url} urinilmoqda...")
+            wait = WebDriverWait(driver, 20)
+
+            driver.get(url)
+            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+            _human_delay(0.5, 1.0)
+
+            box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+            box.click()
+            _human_delay(0.4, 0.8)
+            box.send_keys(query)
+            _human_delay(0.3, 0.6)
+            box.send_keys(Keys.ENTER)
+            _human_delay(1.5, 2.5)
+
+            print(f"[warmup] OK: {url}")
+            return True
+
+        except Exception as e:
+            print(f"[warmup] {url} ishlamadi: {e} — keyingisi sinab ko'riladi...")
+            continue
+
+    print("[warmup] Hamma warmup saytlari ishlamadi — shunga qaramay davom etilmoqda")
+    return False
 
 
 # ── Sahifani ochish ───────────────────────────────────────────────────────────
@@ -636,12 +667,7 @@ def fetch_page_list(page_num: int) -> dict | None:
     """
     Berilgan page ro'yxatini oladi (modal ochmasdan).
     """
-    driver = _get_driver()
-
-    if len(driver.window_handles) == 1:
-        current_url = driver.current_url
-        if "youtube" not in current_url and "license" not in current_url:
-            _youtube_warmup(driver)
+    driver = _get_driver()  # warmup _get_driver ichida, alohida tekshiruv shart emas
 
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
@@ -679,12 +705,7 @@ def fetch_page(page_num: int) -> dict | None:
     """
     Berilgan page raqami uchun ma'lumot oladi (HTML orqali).
     """
-    driver = _get_driver()
-
-    if len(driver.window_handles) == 1:
-        current_url = driver.current_url
-        if "youtube" not in current_url and "license" not in current_url:
-            _youtube_warmup(driver)
+    driver = _get_driver()  # warmup _get_driver ichida, alohida tekshiruv shart emas
 
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
@@ -786,4 +807,3 @@ def fetch_new_since(existing_numbers: set[str], max_pages: int = 100) -> list[di
 
     print(f"[kochirish_html] fetch_new_since: jami {len(new_certs)} ta yangi yozuv topildi")
     return new_certs
-
