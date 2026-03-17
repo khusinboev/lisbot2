@@ -348,7 +348,8 @@ def _warmup(driver) -> bool:
         print("[warmup] YouTube boshlandi...")
         wait = WebDriverWait(driver, 35)
 
-        driver.get("https://www.youtube.com")
+        # JS orqali navigate — bot fingerprint'i kamroq (repo dan olingan yondashuv)
+        driver.execute_script("window.location.href = arguments[0];", "https://www.youtube.com")
         wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
         _human_delay(1.5, 2.5)
 
@@ -386,7 +387,11 @@ def _warmup(driver) -> bool:
         box.send_keys(Keys.ENTER)
 
         # Natijalar yuklanishini kut
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ytd-video-renderer, ytd-rich-item-renderer")))
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ytd-video-renderer, ytd-rich-item-renderer")))
+        except Exception:
+            # Ba'zan results selector o'zgaradi — contents div yetarli
+            wait.until(EC.presence_of_element_located((By.ID, "contents")))
         _human_delay(1.5, 2.5)
 
         # Scroll — natijalarni ko'rib chiqayotgan kabi
@@ -409,26 +414,60 @@ def _warmup(driver) -> bool:
 
 
 # ── Sahifani ochish ───────────────────────────────────────────────────────────
+def _page_has_rows(driver) -> bool:
+    """DOM da ro'yxat elementlari bor-yo'qligini tekshiradi."""
+    if driver.find_elements(By.CSS_SELECTOR, "tr.Table_row__329lz"):
+        return True
+    return bool(driver.find_elements(By.CSS_SELECTOR, "div.RegistryPage_tableMobileWrapper__3oxDb"))
+
+
+def _wait_for_rows(driver, timeout=40) -> bool:
+    """
+    Ro'yxat elementlari paydo bo'lguncha 1s intervalda polling qiladi.
+    Repo dagi wait_for_data() dan olingan yondashuv.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if _page_has_rows(driver):
+                return True
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return False
+
+
 def _open_page(driver, page_num: int) -> bool:
     """
-    0-indexed page ochadi (&page=1 dan boshlanadi).
+    0-indexed page ochadi. Repo dagi navigate_and_wait() yondashuvi:
+    driver.get() dan keyin ro'yxat elementlari paydo bo'lguncha polling.
+    Bo'sh kelsa refresh + qayta kutish (3 urinish).
     """
     url = f"{BASE_URL}{FILTER_PARAMS}&page={page_num + 1}"
     print(f"[kochirish_html] URL ochilmoqda: {url}")
 
-    wait = WebDriverWait(driver, 60)
-
     for attempt in range(3):
         try:
             driver.get(url)
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-            _human_delay(1.2, 2.0)
-            return True
         except Exception as e:
-            print(f"[kochirish_html] Sahifa ochishda xato (attempt {attempt + 1}/3): {e}")
-            _human_delay(3.0, 5.0)
+            print(f"[kochirish_html] driver.get xato (attempt {attempt + 1}/3): {e}")
 
+        # Ro'yxat elementlarini polling bilan kut
+        if _wait_for_rows(driver, timeout=40):
+            time.sleep(2.0)  # JS lazy-load uchun qo'shimcha
+            _human_delay(0.5, 1.0)
+            return True
+
+        print(f"[kochirish_html] Sahifa bo'sh/yuklanmadi — {attempt + 1}/3 urinish")
+        wait_time = 10.0 + attempt * 5.0  # 10s, 15s, 20s
+        print(f"[kochirish_html] {wait_time:.0f}s kutilmoqda...")
+        time.sleep(wait_time)
+        try:
+            driver.refresh()
+        except Exception:
+            pass
+
+    print(f"[kochirish_html] 3 urinishdan keyin ham sahifa yuklanmadi: page={page_num}")
     return False
 
 
