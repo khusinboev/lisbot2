@@ -7,8 +7,9 @@ services:
       - .env
     environment:
       IN_DOCKER: "1"
-      CHROME_HEADLESS: "1"
+      CHROME_HEADLESS: "0"
       CHROME_PROFILE_DIR: "/data/chrome_profile"
+      DISPLAY: ":99"
       # Optional: set if uc has trouble auto-detecting Chrome major
       # CHROME_VERSION_MAIN: "146"
     volumes:

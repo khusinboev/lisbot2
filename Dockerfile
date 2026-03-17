@@ -7,10 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps for Chrome + selenium/uc stability
+# System deps for Chrome + selenium/uc stability + virtual display (Xvfb)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
       fonts-liberation \
+      xauth xvfb \
       libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 \
       libdrm2 libexpat1 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
       libpangocairo-1.0-0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 \
@@ -32,10 +33,12 @@ COPY . /app
 
 # Runtime defaults for container
 ENV IN_DOCKER=1 \
-    CHROME_HEADLESS=1 \
-    CHROME_PROFILE_DIR=/data/chrome_profile
+    CHROME_HEADLESS=0 \
+    CHROME_PROFILE_DIR=/data/chrome_profile \
+    DISPLAY=:99
 
 VOLUME ["/data"]
 
-CMD ["python", "main.py"]
+# Start virtual display, then bot
+CMD ["/bin/sh", "-c", "Xvfb :99 -screen 0 1024x768x24 & python main.py"]
 
