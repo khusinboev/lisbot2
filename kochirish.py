@@ -307,16 +307,10 @@ def fetch_page(page_num: int) -> dict | None:
     return None
 
 
-def fetch_new_since(last_number: int, max_pages: int = 100) -> list[dict]:
+def fetch_new_since(existing_numbers: set[str], max_pages: int = 100) -> list[dict]:
     """
-    last_number dan katta number ga ega barcha sertifikatlarni yig‘adi.
-
-    Args:
-        last_number (int): bazadagi eng katta number (taqqoslash uchun)
-        max_pages (int): haddan tashqari ko‘p sahifa yuklamaslik chegarasi
-
-    Returns:
-        list[dict]: yangi sertifikatlar ro‘yxati (har biri fetch_page() formatida)
+    API ro'yxatidagi hujjat raqamlarini bazadagi mavjud raqamlar bilan solishtiradi.
+    Birinchi marta bazada mavjud raqam uchragan page'gacha bo'lgan yo'q yozuvlarni qaytaradi.
     """
     new_certs = []
     page = 0
@@ -331,24 +325,28 @@ def fetch_new_since(last_number: int, max_pages: int = 100) -> list[dict]:
         if not certs:
             break
 
-        # Sahifadagi barcha yozuvlarni tekshiramiz (ular kamayish tartibida deb faraz)
-        all_smaller_found = False
+        page_has_existing = False
         for cert in certs:
-            try:
-                num = int(cert["number"])
-            except (ValueError, TypeError):
-                # Number raqam emas – bunday holat kam, lekin saqlab o‘tamiz
+            number = cert.get("number")
+            if number is None:
                 continue
 
-            if num > last_number:
-                new_certs.append(cert)
-            else:
-                # Birinchi kichik yozuv uchragach, keyingilari ham kichik bo‘ladi
-                all_smaller_found = True
-                break
+            try:
+                normalized = str(int(str(number).strip()))
+            except (TypeError, ValueError):
+                normalized = str(number).strip()
 
-        if all_smaller_found:
-            break   # keyingi sahifalarda katta raqamlar bo‘lishi mumkin emas
+            if not normalized:
+                continue
+
+            if normalized in existing_numbers:
+                page_has_existing = True
+                continue
+
+            new_certs.append(cert)
+
+        if page_has_existing:
+            break
 
         page += 1
 

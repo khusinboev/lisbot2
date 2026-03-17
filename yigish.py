@@ -59,6 +59,41 @@ def init_db():
         )
     """)
 
+    # Agar kimdir columnlarni qo'lda o'chirib yuborgan bo'lsa, qayta qo'shib qo'yamiz.
+    def _ensure_columns(table: str, columns: list[tuple[str, str]]):
+        cur.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cur.fetchall()}
+        for name, ddl in columns:
+            if name in existing:
+                continue
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            except Exception:
+                pass
+
+    _ensure_columns("certificates", [
+        ("uuid", "TEXT UNIQUE NOT NULL"),
+        ("number", "TEXT"),
+        ("tin", "INTEGER"),
+        ("name", "TEXT"),
+        ("active", "INTEGER"),
+        ("specialization", "TEXT"),
+        ("page_num", "INTEGER"),
+        ("created_at", "TEXT DEFAULT (datetime('now'))"),
+    ])
+
+    _ensure_columns("filtered_certificates", [
+        ("uuid", "TEXT UNIQUE NOT NULL"),
+        ("number", "TEXT"),
+        ("tin", "INTEGER"),
+        ("name", "TEXT"),
+        ("active", "INTEGER"),
+        ("specialization", "TEXT"),
+        ("page_num", "INTEGER"),
+        ("filter_tag", "TEXT"),
+        ("created_at", "TEXT DEFAULT (datetime('now'))"),
+    ])
+
     conn.commit()
     conn.close()
 

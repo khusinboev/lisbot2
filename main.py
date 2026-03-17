@@ -80,6 +80,80 @@ def _db_max_number():
         return None
 
 
+def _normalize_certificate_number(value) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        return str(int(text))
+    except (TypeError, ValueError):
+        return text
+
+
+def _db_existing_numbers() -> set[str]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT number FROM certificates WHERE number IS NOT NULL")
+        rows = cur.fetchall()
+        conn.close()
+
+        numbers = set()
+        for (number,) in rows:
+            normalized = _normalize_certificate_number(number)
+            if normalized:
+                numbers.add(normalized)
+        return numbers
+    except Exception:
+        return set()
+
+
+def _db_upsert_certificates(certs: list[dict]) -> tuple[int, int]:
+    inserted = 0
+    skipped = 0
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    try:
+        for cert in certs:
+            file_uuid = cert.get("uuid")
+            if not file_uuid:
+                skipped += 1
+                continue
+
+            cur.execute("""
+                INSERT INTO certificates (uuid, number, tin, name, active, specialization, page_num)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uuid) DO UPDATE SET
+                    number = excluded.number,
+                    tin = excluded.tin,
+                    name = excluded.name,
+                    active = excluded.active,
+                    specialization = excluded.specialization,
+                    page_num = excluded.page_num
+            """, (
+                file_uuid,
+                cert.get("number"),
+                cert.get("tin"),
+                cert.get("name"),
+                1 if cert.get("active") else 0,
+                cert.get("specialization_oz", ""),
+                cert.get("page_num", 0),
+            ))
+            inserted += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return inserted, skipped
+
+
 def _pdf_url_by_token(file_token: str) -> str:
     return f"https://doc.licenses.uz/v1/certificate/uuid/{file_token}/pdf?language={PDF_LANGUAGE}&download"
 
@@ -399,13 +473,13 @@ async def on_tekshirish(callback: CallbackQuery):
         )
         return
 
-    last_number = _db_max_number()
-    if not last_number:
-        await callback.message.answer("❌ Bazada number topilmadi.", reply_markup=main_keyboard())
+    existing_numbers = _db_existing_numbers()
+    if not existing_numbers:
+        await callback.message.answer("❌ Bazada taqqoslash uchun hujjat raqami topilmadi.", reply_markup=main_keyboard())
         return
 
     status_msg = await callback.message.answer(
-        f"🔍 Yangi ma'lumotlar tekshirilmoqda...\nBazadagi oxirgi raqam: <b>{last_number}</b>",
+        f"🔍 Yangi ma'lumotlar tekshirilmoqda...\nBazada mavjud hujjatlar bilan solishtirilmoqda.",
         parse_mode="HTML"
     )
     _busy = True
@@ -417,11 +491,11 @@ async def on_tekshirish(callback: CallbackQuery):
         try:
             await _update_status(status_msg, "🌐 Saytdan yangi ma'lumotlar yuklanmoqda...")
             from kochirish_html import fetch_new_since
-            new_certs = await loop.run_in_executor(None, fetch_new_since, int(last_number))
+            new_certs = await loop.run_in_executor(None, fetch_new_since, existing_numbers)
 
             if not new_certs:
                 await status_msg.edit_text(
-                    f"✅ Yangi ma'lumot yo'q.\n\nBazadagi oxirgi: <b>{last_number}</b>",
+                    "✅ Yangi ma'lumot yo'q.\n\nSaytdagi yuqori sahifalarda bazada yo'q hujjat topilmadi.",
                     parse_mode="HTML",
                     reply_markup=main_keyboard()
                 )
@@ -429,25 +503,14 @@ async def on_tekshirish(callback: CallbackQuery):
 
             # DBga yozish
             await _update_status(status_msg, f"📥 {len(new_certs)} ta yangi yozuv saqlanmoqda...")
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            for cert in new_certs:
-                cur.execute("""
-                    INSERT INTO certificates (uuid, number, tin, name, active, specialization, page_num)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(uuid) DO UPDATE SET
-                        active = excluded.active
-                """, (
-                    cert.get("uuid"),
-                    cert.get("number"),
-                    cert.get("tin"),
-                    cert.get("name"),
-                    1 if cert.get("active") else 0,
-                    cert.get("specialization_oz", ""),
-                    0
-                ))
-            conn.commit()
-            conn.close()
+            inserted_count, skipped_count = _db_upsert_certificates(new_certs)
+
+            if inserted_count == 0:
+                await status_msg.edit_text(
+                    "❌ Yangi yozuvlar topildi, lekin hujjat tokeni olinmadi. HTML tuzilmasi yana o'zgargan bo'lishi mumkin.",
+                    reply_markup=main_keyboard()
+                )
+                return
 
             # filter
             await _update_status(status_msg, "🔍 Saralanmoqda...")
@@ -478,7 +541,9 @@ async def on_tekshirish(callback: CallbackQuery):
 
             await status_msg.edit_text(
                 f"✅ Tekshiruv yakunlandi!\n\n"
-                f"🆕 Yangi: <b>{len(new_certs)}</b> ta\n"
+                f"🆕 Topildi: <b>{len(new_certs)}</b> ta\n"
+                f"💾 Saqlandi: <b>{inserted_count}</b> ta\n"
+                f"⚠️ UUID topilmagan: <b>{skipped_count}</b> ta\n"
                 f"📎 Endi yangilar yuboriladi (PDF chiqmasa link bilan)...",
                 parse_mode="HTML",
                 reply_markup=main_keyboard()
@@ -518,8 +583,8 @@ async def _auto_check_loop():
                 await asyncio.sleep(AUTO_CHECK_INTERVAL_SECONDS)
                 continue
 
-            last_number = _db_max_number()
-            if not last_number:
+            existing_numbers = _db_existing_numbers()
+            if not existing_numbers:
                 await asyncio.sleep(AUTO_CHECK_INTERVAL_SECONDS)
                 continue
 
@@ -527,7 +592,7 @@ async def _auto_check_loop():
             loop = asyncio.get_event_loop()
 
             from kochirish_html import fetch_new_since
-            new_certs = await loop.run_in_executor(None, fetch_new_since, int(last_number))
+            new_certs = await loop.run_in_executor(None, fetch_new_since, existing_numbers)
 
             if not new_certs:
                 _busy = False
@@ -535,25 +600,11 @@ async def _auto_check_loop():
                 continue
 
             # DBga yozish
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            for cert in new_certs:
-                cur.execute("""
-                    INSERT INTO certificates (uuid, number, tin, name, active, specialization, page_num)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(uuid) DO UPDATE SET
-                        active = excluded.active
-                """, (
-                    cert.get("uuid"),
-                    cert.get("number"),
-                    cert.get("tin"),
-                    cert.get("name"),
-                    1 if cert.get("active") else 0,
-                    cert.get("specialization_oz", ""),
-                    0
-                ))
-            conn.commit()
-            conn.close()
+            inserted_count, skipped_count = _db_upsert_certificates(new_certs)
+            if inserted_count == 0:
+                _busy = False
+                await asyncio.sleep(AUTO_CHECK_INTERVAL_SECONDS)
+                continue
 
             # filter
             await loop.run_in_executor(None, filter_by_specialization, SPECIALIZATION_FILTER)
@@ -587,6 +638,8 @@ async def _auto_check_loop():
                     await _safe_send_message(
                         chat_id=uid,
                         text=f"🕒 <b>AutoCheck</b>\n🆕 Yangi yozuvlar topildi: <b>{len(new_certs)}</b> ta\n"
+                            f"💾 Saqlandi: <b>{inserted_count}</b> ta\n"
+                            f"⚠️ UUID topilmagan: <b>{skipped_count}</b> ta\n"
                              f"📎 Yuborilmoqda (PDF chiqmasa link bilan)...",
                         parse_mode="HTML"
                     )

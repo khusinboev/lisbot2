@@ -12,6 +12,7 @@ import re
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -94,6 +95,138 @@ def _human_delay(a=0.8, b=2.0):
     time.sleep(random.uniform(a, b))
 
 
+def _normalize_number(value) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        return str(int(text))
+    except (TypeError, ValueError):
+        return text
+
+
+def _extract_uuid_from_href(href: str | None) -> str | None:
+    if not href:
+        return None
+
+    match = re.search(r"/uuid/([^/?]+)/pdf", href)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"/uuid/([^/?]+)", href)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def _is_document_tab_text(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return False
+    keywords = ["hujjat", "ҳужжат", "документ", "document"]
+    return any(keyword in normalized for keyword in keywords)
+
+
+def _open_document_tab_and_get_uuid(driver) -> str | None:
+    try:
+        tabs = driver.find_elements(By.CSS_SELECTOR, "[class*='RegistryView_tabItem']")
+        document_tab = None
+        for tab in tabs:
+            try:
+                if _is_document_tab_text(tab.text):
+                    document_tab = tab
+                    break
+            except Exception:
+                continue
+
+        if document_tab is None:
+            return None
+
+        if "RegistryView_tabItemActive" not in (document_tab.get_attribute("class") or ""):
+            if not _click_element(driver, document_tab):
+                return None
+
+        WebDriverWait(driver, 10).until(
+            lambda d: "RegistryView_tabItemActive" in (document_tab.get_attribute("class") or "")
+        )
+
+        link = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((
+                By.CSS_SELECTOR,
+                ".RegistryView_wrapper__3LW9q a[href*='doc.licenses.uz'][href*='/uuid/'][href*='/pdf']",
+            ))
+        )
+
+        href = link.get_attribute("href") or ""
+        uuid = _extract_uuid_from_href(href)
+        if uuid:
+            return uuid
+
+        try:
+            page_source = driver.page_source
+            return _extract_uuid_from_href(page_source)
+        except Exception:
+            return None
+    except Exception:
+        try:
+            page_source = driver.page_source
+            return _extract_uuid_from_href(page_source)
+        except Exception:
+            return None
+
+
+def _click_element(driver, element) -> bool:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    except Exception:
+        pass
+
+    click_attempts = [
+        lambda: element.click(),
+        lambda: driver.execute_script("arguments[0].click();", element),
+        lambda: ActionChains(driver).move_to_element(element).click().perform(),
+    ]
+
+    for attempt in click_attempts:
+        try:
+            attempt()
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
+def _open_details_modal(driver, row_el, layout: str | None) -> bool:
+    candidates = [row_el]
+
+    if layout == "desktop":
+        try:
+            action = row_el.find_element(By.CSS_SELECTOR, ".Table_actionCell__2NMKA, .Table_action__3OpEV")
+            candidates.insert(0, action)
+        except Exception:
+            pass
+
+    for candidate in candidates:
+        if not _click_element(driver, candidate):
+            continue
+
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".RegistryView_wrapper__3LW9q"))
+            )
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
 def _youtube_warmup(driver):
     """
     Oldingi kabi warmup — sayt anti-botni biroz aldash uchun.
@@ -129,8 +262,28 @@ def _open_page(driver, page_num: int) -> bool:
     for attempt in range(3):
         try:
             driver.get(url)
+            # DOM to'liq yuklanishini kutish
             wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+
+            # Ro'yxat elementlari (desktop jadval yoki mobile kartochkalar) paydo bo'lishini
+            # kutamiz — bu qism aynan siz so'ragan "to'liq yuklanguncha kutish".
+            try:
+                wait_list = WebDriverWait(driver, 40)
+                wait_list.until(
+                    EC.presence_of_element_located(
+                        (
+                            By.CSS_SELECTOR,
+                            "table.Table_table__2OuB7 tbody.Table_body__3kRrD tr.Table_row__329lz, "
+                            ".RegistryPage_tableMobileWrapper__3oxDb",
+                        )
+                    )
+                )
+            except Exception:
+                # Agar ro'yxat elementlari 40s ichida chiqmasa, bu urinishni muvaffaqiyatsiz
+                # deb hisoblaymiz va qayta urinib ko'ramiz.
+                raise
+
             _human_delay(1.2, 2.0)
             return True
         except Exception as e:
@@ -172,7 +325,10 @@ def _parse_list_desktop_rows(driver):
     """
     Katta ekran varianti: <table> ichidagi <tr> lar.
     """
-    rows = driver.find_elements(By.CSS_SELECTOR, "table.Table_table__2OuB7 tbody.Table_body__3kRrD tr.Table_row__329lz")
+    rows = driver.find_elements(
+        By.CSS_SELECTOR,
+        "table.Table_table__2OuB7 tbody.Table_body__3kRrD tr.Table_row__329lz",
+    )
     results = []
     for row in rows:
         try:
@@ -204,17 +360,15 @@ def _parse_list_desktop_rows(driver):
                 )
             )
 
-            results.append(
-                {
-                    "active": active,
-                    "number": number_text,
-                    "tin": tin_text,
-                    "name": name_text,
-                    "specialization_oz": specialization_text,
-                    "uuid": None,  # keyin detal modalidan URL orqali olishga urinib ko'riladi
-                    "row_element": row,
-                }
-            )
+            results.append({
+                "active": active,
+                "number": number_text,
+                "tin": tin_text,
+                "name": name_text,
+                "specialization_oz": specialization_text,
+                "uuid": None,  # keyin detal modalidan URL orqali olishga urinib ko'riladi
+                "layout": "desktop",
+            })
         except Exception as e:
             print(f"[kochirish_html] Desktop row parse xato: {e}")
             continue
@@ -260,17 +414,15 @@ def _parse_list_mobile_cards(driver):
             status_el = card.find_element(By.CSS_SELECTOR, ".Status_wrapper__nLMCI")
             active = "active" in status_el.text.strip().lower()
 
-            results.append(
-                {
-                    "active": active,
-                    "number": number_text,
-                    "tin": tin_text,
-                    "name": name_text,
-                    "specialization_oz": specialization_text,
-                    "uuid": None,
-                    "row_element": card,
-                }
-            )
+            results.append({
+                "active": active,
+                "number": number_text,
+                "tin": tin_text,
+                "name": name_text,
+                "specialization_oz": specialization_text,
+                "uuid": None,
+                "layout": "mobile",
+            })
         except Exception as e:
             print(f"[kochirish_html] Mobile card parse xato: {e}")
             continue
@@ -315,13 +467,11 @@ def _parse_details_modal(driver) -> dict:
         except Exception:
             pass
 
-        # UUID: URL ichidan olishga urinib ko'ramiz (agar bo'lsa)
+        # UUID: faqat "Hujjat" tabidagi PDF havolasidan olinadi
         try:
-            url = driver.current_url
-            # Masalan: .../registry/view/<uuid> format bo'lsa
-            m = re.search(r"/([0-9a-fA-F-]{8,})$", url)
-            if m:
-                details["uuid"] = m.group(1)
+            uuid = _open_document_tab_and_get_uuid(driver)
+            if uuid:
+                details["uuid"] = uuid
         except Exception:
             pass
 
@@ -335,7 +485,6 @@ def _parse_details_modal(driver) -> dict:
             close_btns[0].click()
         else:
             # fallback: ESC
-            from selenium.webdriver.common.action_chains import ActionChains
             ActionChains(driver).send_keys("\uE00C").perform()  # ESC
         _human_delay(0.3, 0.7)
     except Exception:
@@ -345,7 +494,7 @@ def _parse_details_modal(driver) -> dict:
 
 
 # ── Asosiy sahifa parse + modal kombinatsiyasi ────────────────────────────────
-def _collect_page_data(driver, page_num: int):
+def _collect_page_data(driver, page_num: int, target_numbers: set[str] | None = None):
     """
     Bitta sahifadagi barcha yozuvlarni:
     - avval listdan qisqa info
@@ -353,26 +502,71 @@ def _collect_page_data(driver, page_num: int):
     """
     current_page, total_pages = _parse_pagination(driver, page_num)
 
-    # Avval mobile, bo'sh bo'lsa desktop varianti
-    entries = _parse_list_mobile_cards(driver)
-    if not entries:
-        entries = _parse_list_desktop_rows(driver)
+    # Avval mobile, bo'sh bo'lsa desktop varianti.
+    # Ba'zan JS sekin ishlashi mumkin, shuning uchun bir necha marta
+    # (kichik delay bilan) qayta urinib ko'ramiz.
+    entries: list[dict] = []
+    layout: str | None = None
+    for _ in range(3):
+        entries = _parse_list_mobile_cards(driver)
+        if entries:
+            layout = "mobile"
+            break
 
-    certs = []
+        entries = _parse_list_desktop_rows(driver)
+        if entries:
+            layout = "desktop"
+            break
+
+        _human_delay(1.0, 2.0)
+
+    certs: list[dict] = []
+    normalized_targets = {_normalize_number(value) for value in target_numbers} if target_numbers is not None else None
     for entry in entries:
-        row_el = entry.pop("row_element", None)
-        if row_el is None:
+        number = _normalize_number(entry.get("number"))
+        if not number:
+            continue
+        if normalized_targets is not None and number not in normalized_targets:
             continue
 
+        # Har safar DOMdan yangi element izlaymiz — shunda oldingi modal
+        # ochilib-yopilgandan keyingi stale element muammosidan qochamiz.
+        row_el = None
         try:
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", row_el)
-        except Exception:
-            pass
-
-        try:
-            row_el.click()
+            if layout == "mobile":
+                cards = driver.find_elements(By.CSS_SELECTOR, ".RegistryPage_tableMobileWrapper__3oxDb")
+                for card in cards:
+                    try:
+                        if number in card.text:
+                            row_el = card
+                            break
+                    except Exception:
+                        continue
+            else:
+                rows = driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "table.Table_table__2OuB7 tbody.Table_body__3kRrD tr.Table_row__329lz",
+                )
+                for row in rows:
+                    try:
+                        tds = row.find_elements(By.CSS_SELECTOR, "td.Table_cell__2s5cE")
+                        if len(tds) < 3:
+                            continue
+                        if tds[2].text.strip() == number:
+                            row_el = row
+                            break
+                    except Exception:
+                        continue
         except Exception as e:
-            print(f"[kochirish_html] Row klik xato: {e}")
+            print(f"[kochirish_html] Row qidirishda xato: {e}")
+            continue
+
+        if row_el is None:
+            print(f"[kochirish_html] Row topilmadi (number={number})")
+            continue
+
+        if not _open_details_modal(driver, row_el, layout):
+            print(f"[kochirish_html] Modal ochilmadi (number={number})")
             continue
 
         _human_delay(0.8, 1.5)
@@ -385,6 +579,7 @@ def _collect_page_data(driver, page_num: int):
             "name": details.get("name") or entry.get("name"),
             "specialization_oz": details.get("specialization_oz") or entry.get("specialization_oz"),
             "uuid": details.get("uuid") or entry.get("uuid"),
+            "page_num": page_num,
         }
 
         active_text = details.get("active_text", "")
@@ -398,6 +593,82 @@ def _collect_page_data(driver, page_num: int):
         "all_pages": total_pages,
         "certificates": certs,
     }
+
+
+def _collect_page_list(driver, page_num: int) -> dict:
+    """
+    Bitta sahifadagi ro'yxatdan (modalga kirmasdan) minimal ma'lumotlarni oladi.
+    """
+    current_page, total_pages = _parse_pagination(driver, page_num)
+
+    entries: list[dict] = []
+    for _ in range(3):
+        entries = _parse_list_mobile_cards(driver)
+        if not entries:
+            entries = _parse_list_desktop_rows(driver)
+        if entries:
+            break
+        _human_delay(1.0, 2.0)
+
+    # ro'yxat mode'ida row_element saqlamaymiz
+    minimal = []
+    for e in entries:
+        minimal.append({
+            "active": e.get("active"),
+            "number": e.get("number"),
+            "tin": e.get("tin"),
+            "name": e.get("name"),
+            "specialization_oz": e.get("specialization_oz"),
+            "uuid": None,
+        })
+
+    return {
+        "current_page": current_page,
+        "all_pages": total_pages,
+        "certificates": minimal,
+    }
+
+
+def fetch_page_list(page_num: int) -> dict | None:
+    """
+    Berilgan page ro'yxatini oladi (modal ochmasdan).
+    """
+    driver = _get_driver()
+
+    if len(driver.window_handles) == 1:
+        current_url = driver.current_url
+        if "youtube" not in current_url and "license" not in current_url:
+            _youtube_warmup(driver)
+
+    MAX_RETRIES = 3
+    for attempt in range(MAX_RETRIES):
+        print(f"[kochirish_html] fetch_page_list({page_num}) — urinish {attempt + 1}/{MAX_RETRIES}")
+
+        opened = _open_page(driver, page_num)
+        if not opened:
+            print("[kochirish_html] Sahifa ochilmadi — retry")
+            _human_delay(5.0, 8.0)
+            continue
+
+        try:
+            data = _collect_page_list(driver, page_num)
+        except Exception as e:
+            print(f"[kochirish_html] collect_page_list xato: {e}")
+            data = None
+
+        if data is None or not data.get("certificates"):
+            print(f"[kochirish_html] {attempt + 1}-urinishda ham ro'yxat olinmadi yoki bo'sh")
+            _human_delay(5.0, 10.0)
+            continue
+
+        print(
+            f"[kochirish_html] OK(list) — page={data['current_page']}, "
+            f"jami={data['all_pages']}, certs={len(data['certificates'])}"
+        )
+        return data
+
+    print(f"[kochirish_html] {MAX_RETRIES} urinishdan keyin ham list olinmadi: page={page_num}")
+    return None
 
 
 # ── Tashqaridan chaqiriladigan funksiya ───────────────────────────────────────
@@ -443,40 +714,72 @@ def fetch_page(page_num: int) -> dict | None:
     return None
 
 
-def fetch_new_since(last_number: int, max_pages: int = 100) -> list[dict]:
+def fetch_new_since(existing_numbers: set[str], max_pages: int = 100) -> list[dict]:
     """
-    last_number dan katta number ga ega barcha sertifikatlarni yig‘adi (HTML orqali).
+    Ro'yxatdagi hujjat raqamlarini bazadagi mavjud raqamlar bilan solishtiradi.
+
+    Page ichida birorta bazada mavjud raqam topilmaguncha keyingi page'ga o'tadi
+    va topilmagan raqamlarni vaqtincha yig'ib boradi. Birinchi marta bazada bor
+    raqam uchragan page'ga yetgach, shu paytgacha yig'ilgan yo'q raqamlar uchun
+    batafsil ma'lumotlarni modal orqali olib qaytaradi.
     """
     new_certs = []
+    pending_pages: list[tuple[int, list[str]]] = []
+    queued_numbers: set[str] = set()
     page = 0
 
     while page < max_pages:
         print(f"[kochirish_html] fetch_new_since: page {page} yuklanmoqda...")
-        data = fetch_page(page)
-        if data is None:
+
+        list_data = fetch_page_list(page)
+        if list_data is None:
             break
 
-        certs = data.get("certificates", [])
-        if not certs:
+        listed = list_data.get("certificates", [])
+        if not listed:
             break
 
-        all_smaller_found = False
-        for cert in certs:
-            try:
-                num = int(cert["number"])
-            except (ValueError, TypeError, KeyError):
+        page_missing_numbers: list[str] = []
+        page_has_existing = False
+
+        for cert in listed:
+            normalized_number = _normalize_number(cert.get("number"))
+            if not normalized_number:
                 continue
 
-            if num > last_number:
-                new_certs.append(cert)
-            else:
-                all_smaller_found = True
-                break
+            if normalized_number in existing_numbers:
+                page_has_existing = True
+                continue
 
-        if all_smaller_found:
+            if normalized_number in queued_numbers:
+                continue
+
+            queued_numbers.add(normalized_number)
+            page_missing_numbers.append(normalized_number)
+
+        if page_missing_numbers:
+            pending_pages.append((page, page_missing_numbers))
+
+        if page_has_existing:
             break
 
         page += 1
+
+    for page_num, page_numbers in pending_pages:
+        driver = _get_driver()
+        opened = _open_page(driver, page_num)
+        if not opened:
+            print(f"[kochirish_html] Detail uchun page ochilmadi: {page_num}")
+            continue
+
+        try:
+            detailed_page = _collect_page_data(driver, page_num, target_numbers=set(page_numbers))
+        except Exception as e:
+            print(f"[kochirish_html] collect_page_data(new_only) xato: {e}")
+            detailed_page = None
+
+        if detailed_page and detailed_page.get("certificates"):
+            new_certs.extend(detailed_page["certificates"])
 
     print(f"[kochirish_html] fetch_new_since: jami {len(new_certs)} ta yangi yozuv topildi")
     return new_certs
