@@ -61,14 +61,33 @@ def _init_driver():
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-notifications")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1024,768")
 
-    # To'g'ri Chrome path'ni qo'lda ko'rsat
+    # Real monitor o'lchamiga o'xshash — 1366x768 eng keng tarqalgan
+    options.add_argument("--window-size=1366,768")
+
+    # Bot izlarini yashirish
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-browser-side-navigation")
+
+    # Real user-agent (Ubuntu Chrome 136)
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/136.0.0.0 Safari/537.36"
+    )
+
+    # Tilni o'rnatish — serverda default en-US bo'lishi mumkin
+    options.add_argument("--lang=uz-UZ,uz;q=0.9,en-US;q=0.8,en;q=0.7")
+
+    # Xvfb bilan render xatoliklarini oldini olish
+    options.add_argument("--disable-software-rasterizer")
+
+    # Chrome path
     options.binary_location = "/opt/google/chrome/google-chrome"
 
     headless = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
@@ -82,6 +101,17 @@ def _init_driver():
         driver = uc.Chrome(options=options)
 
     driver.set_page_load_timeout(120)
+
+    # WebDriver belgisini JS darajasida o'chirish
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['uz-UZ', 'uz', 'en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """
+    })
+
     return driver
 
 
@@ -234,20 +264,49 @@ def _open_details_modal(driver, row_el, layout: str | None) -> bool:
 # Warmup uchun saytlar zanjiri: biri ishlamasa keyingisi uriniladi
 _WARMUP_SITES = [
     # (url, CSS selector, qidiruv so'z)
+    ("https://www.wikipedia.org", "#searchInput",    "O'zbekiston"),
     ("https://www.google.com",    "input[name='q']", "python tutorial"),
-    ("https://www.wikipedia.org", "#searchInput",    "python"),
     ("https://duckduckgo.com",    "input[name='q']", "python tutorial"),
 ]
+
+
+def _human_scroll(driver):
+    """Sahifada inson kabi scroll qiladi."""
+    try:
+        for _ in range(random.randint(2, 4)):
+            scroll_y = random.randint(200, 500)
+            driver.execute_script(f"window.scrollBy(0, {scroll_y});")
+            time.sleep(random.uniform(0.3, 0.7))
+        # Qaytib yuqoriga
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(random.uniform(0.2, 0.5))
+    except Exception:
+        pass
+
+
+def _human_mouse_move(driver):
+    """Sahifada inson kabi mouse harakati."""
+    try:
+        action = ActionChains(driver)
+        # Ekranda bir necha nuqtaga siljitish
+        for _ in range(random.randint(3, 6)):
+            x = random.randint(100, 900)
+            y = random.randint(100, 500)
+            action.move_by_offset(x, y)
+            time.sleep(random.uniform(0.1, 0.3))
+        action.perform()
+    except Exception:
+        pass
 
 
 def _warmup(driver) -> bool:
     """
     Cloudflare bot-detection'ni aldash uchun oddiy saytlarda qisqa faoliyat ko'rsatadi.
 
-    YouTube o'rniga ishonchli muqobillar zanjiri:
-      Google → Wikipedia → DuckDuckGo
-    Biri xato bersа keyingisiga o'tadi.
-    Hammasi ishlamasa ham bot o'lmaydi — xato log qilinib davom etadi.
+    Zanjir: Wikipedia → Google → DuckDuckGo
+    Har bir saytda: sahifaga kirish + qidirish + scroll + mouse harakat.
+    Biri xato bersa keyingisiga o'tadi.
+    Hammasi ishlamasa ham bot o'lmaydi.
 
     SKIP_WARMUP=true bo'lsa butunlay o'tkazib yuboradi.
     """
@@ -258,19 +317,37 @@ def _warmup(driver) -> bool:
     for url, selector, query in _WARMUP_SITES:
         try:
             print(f"[warmup] {url} urinilmoqda...")
-            wait = WebDriverWait(driver, 20)
+            wait = WebDriverWait(driver, 25)
 
             driver.get(url)
             wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-            _human_delay(0.5, 1.0)
+            _human_delay(0.8, 1.5)
 
+            # Scroll — sahifa yuklangach biroz o'qigan kabi
+            _human_scroll(driver)
+
+            # Search box topib yozish
             box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+
+            # Mouse harakati — to'g'ri bosmasdan avval
+            _human_mouse_move(driver)
+            _human_delay(0.3, 0.6)
+
             box.click()
             _human_delay(0.4, 0.8)
-            box.send_keys(query)
-            _human_delay(0.3, 0.6)
+
+            # Harfma-harf yozish — bot emas, odam kabi
+            for ch in query:
+                box.send_keys(ch)
+                time.sleep(random.uniform(0.05, 0.15))
+
+            _human_delay(0.5, 1.0)
             box.send_keys(Keys.ENTER)
-            _human_delay(1.5, 2.5)
+            _human_delay(2.0, 3.5)
+
+            # Natijalar sahifasida ham scroll
+            _human_scroll(driver)
+            _human_delay(1.0, 2.0)
 
             print(f"[warmup] OK: {url}")
             return True
