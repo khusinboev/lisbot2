@@ -421,28 +421,8 @@ def _open_page(driver, page_num: int) -> bool:
     for attempt in range(3):
         try:
             driver.get(url)
-            # DOM to'liq yuklanishini kutish
             wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-
-            # Ro'yxat elementlari (desktop jadval yoki mobile kartochkalar) paydo bo'lishini
-            # kutamiz — bu qism aynan siz so'ragan "to'liq yuklanguncha kutish".
-            try:
-                wait_list = WebDriverWait(driver, 40)
-                wait_list.until(
-                    EC.presence_of_element_located(
-                        (
-                            By.CSS_SELECTOR,
-                            "table.Table_table__2OuB7 tbody.Table_body__3kRrD tr.Table_row__329lz, "
-                            ".RegistryPage_tableMobileWrapper__3oxDb",
-                        )
-                    )
-                )
-            except Exception:
-                # Agar ro'yxat elementlari 40s ichida chiqmasa, bu urinishni muvaffaqiyatsiz
-                # deb hisoblaymiz va qayta urinib ko'ramiz.
-                raise
-
             _human_delay(1.2, 2.0)
             return True
         except Exception as e:
