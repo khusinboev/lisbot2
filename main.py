@@ -22,6 +22,9 @@ from yigish import init_db, collect_all, filter_by_specialization, DB_PATH
 from dotenv import load_dotenv
 load_dotenv()
 
+# Screenshot yuborish uchun loop reference
+_main_loop: asyncio.AbstractEventLoop | None = None
+
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = set(int(uid.strip()) for uid in os.getenv("ALLOWED_USERS", "").split(",") if uid.strip())
@@ -243,6 +246,45 @@ async def _safe_send_message(**kwargs):
             await asyncio.sleep(int(e.retry_after) + 1)
         except Exception:
             raise
+
+
+async def _safe_send_photo(chat_id: int, photo_path: str, caption: str):
+    """Screenshot faylini Telegram ga yuboradi."""
+    try:
+        from aiogram.types import FSInputFile
+        photo = FSInputFile(photo_path)
+        await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, parse_mode="HTML")
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(int(e.retry_after) + 1)
+        await _safe_send_photo(chat_id, photo_path, caption)
+    except Exception as e:
+        print(f"[screenshot] send_photo xato: {e}")
+    finally:
+        # Faylni yuborilgandan keyin o'chirish
+        try:
+            import os
+            if os.path.exists(photo_path):
+                os.remove(photo_path)
+        except Exception:
+            pass
+
+
+def _make_screenshot_callback(chat_id: int):
+    """
+    kochirish_html.py ga uzatiladigan screenshot callback.
+    Thread-safe: asyncio loop orqali yuboradi.
+    """
+    def callback(path: str, caption: str):
+        if _main_loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                _safe_send_photo(chat_id, path, caption),
+                _main_loop
+            )
+        except Exception as e:
+            print(f"[screenshot] callback xato: {e}")
+    return callback
 
 
 async def _send_one_cert_pdf_or_fallback(chat_id: int, file_token, number, tin, name, active, specialization, page_num):
@@ -486,6 +528,10 @@ async def on_tekshirish(callback: CallbackQuery):
 
     loop = asyncio.get_event_loop()
 
+    # Screenshot callback — scraper holatini real-time ko'rsatadi
+    from kochirish_html import set_screenshot_callback
+    set_screenshot_callback(_make_screenshot_callback(callback.from_user.id))
+
     async def check_new():
         global _busy
         try:
@@ -673,6 +719,8 @@ async def _update_status(message: Message, text: str):
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 async def on_startup():
+    global _main_loop
+    _main_loop = asyncio.get_event_loop()
     print("[main] Bot ishga tushmoqda...")
     init_db()
     print("[main] DB tayyor")

@@ -437,11 +437,47 @@ def _wait_for_rows(driver, timeout=40) -> bool:
     return False
 
 
+# Screenshot callback — main.py dan set qilinadi
+# screenshot_callback(path: str, caption: str) ko'rinishida
+_screenshot_callback = None
+
+
+def set_screenshot_callback(fn):
+    """main.py dan screenshot yuborish funksiyasini bog'laydi."""
+    global _screenshot_callback
+    _screenshot_callback = fn
+
+
+def _take_screenshot(driver, label: str) -> str | None:
+    """Screenshot olib faylga saqlaydi, path qaytaradi."""
+    try:
+        import tempfile
+        path = os.path.join(current_dir, f"screenshot_{label}_{int(time.time())}.png")
+        driver.save_screenshot(path)
+        return path
+    except Exception as e:
+        print(f"[screenshot] Xato: {e}")
+        return None
+
+
+def _send_screenshot(driver, label: str, caption: str):
+    """Screenshot olib callback orqali Telegram ga yuboradi."""
+    if _screenshot_callback is None:
+        return
+    path = _take_screenshot(driver, label)
+    if path:
+        try:
+            _screenshot_callback(path, caption)
+        except Exception as e:
+            print(f"[screenshot] Yuborishda xato: {e}")
+
+
 def _open_page(driver, page_num: int) -> bool:
     """
     0-indexed page ochadi. Repo dagi navigate_and_wait() yondashuvi:
     driver.get() dan keyin ro'yxat elementlari paydo bo'lguncha polling.
     Bo'sh kelsa refresh + qayta kutish (3 urinish).
+    Har urinishda screenshot olinib Telegram ga yuboriladi.
     """
     url = f"{BASE_URL}{FILTER_PARAMS}&page={page_num + 1}"
     print(f"[kochirish_html] URL ochilmoqda: {url}")
@@ -454,12 +490,25 @@ def _open_page(driver, page_num: int) -> bool:
 
         # Ro'yxat elementlarini polling bilan kut
         if _wait_for_rows(driver, timeout=40):
-            time.sleep(2.0)  # JS lazy-load uchun qo'shimcha
+            time.sleep(2.0)
             _human_delay(0.5, 1.0)
+            # Muvaffaqiyatli — ham screenshot
+            _send_screenshot(
+                driver,
+                f"ok_p{page_num}_try{attempt+1}",
+                f"✅ Page {page_num+1} yuklandi (urinish {attempt+1}/3)"
+            )
             return True
 
+        # Yuklanmadi — screenshot olib ko'rsatamiz
+        _send_screenshot(
+            driver,
+            f"fail_p{page_num}_try{attempt+1}",
+            f"⚠️ Page {page_num+1} — ro'yxat ko'rinmadi (urinish {attempt+1}/3)\n🔄 Refresh qilinmoqda..."
+        )
+
         print(f"[kochirish_html] Sahifa bo'sh/yuklanmadi — {attempt + 1}/3 urinish")
-        wait_time = 10.0 + attempt * 5.0  # 10s, 15s, 20s
+        wait_time = 10.0 + attempt * 5.0
         print(f"[kochirish_html] {wait_time:.0f}s kutilmoqda...")
         time.sleep(wait_time)
         try:
@@ -467,6 +516,12 @@ def _open_page(driver, page_num: int) -> bool:
         except Exception:
             pass
 
+    # 3 urinish ham ishlamadi — oxirgi screenshot
+    _send_screenshot(
+        driver,
+        f"failed_p{page_num}",
+        f"❌ Page {page_num+1} — 3 urinishdan keyin ham yuklanmadi"
+    )
     print(f"[kochirish_html] 3 urinishdan keyin ham sahifa yuklanmadi: page={page_num}")
     return False
 
