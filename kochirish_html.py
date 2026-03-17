@@ -47,6 +47,58 @@ def _env_int(name: str):
 
 
 # ── Driver ────────────────────────────────────────────────────────────────────
+def _detect_chrome_binary() -> str | None:
+    """
+    OSga qarab Chrome executable path'ni avtomatik aniqlaydi.
+
+    Ustuvorlik tartibi:
+      1. CHROME_BINARY env o'zgaruvchisi (qo'lda ko'rsatish)
+      2. OS ga mos default joylashuvlar
+      3. Topilmasa None — undetected-chromedriver o'zi qidiradi
+    """
+    import sys
+    import shutil
+
+    # 1. Qo'lda berilgan path (har qanday OS uchun ishlaydi)
+    env_path = os.getenv("CHROME_BINARY", "").strip()
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    # 2. OS ga mos default joylashuvlar
+    if sys.platform == "win32":
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    else:
+        # Linux / Ubuntu server
+        candidates = [
+            "/opt/google/chrome/google-chrome",        # manual install
+            "/usr/bin/google-chrome",                  # apt install
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/snap/bin/chromium",
+        ]
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    # 3. PATH dan qidirish (fallback)
+    for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    return None
 def _is_driver_alive(driver):
     try:
         _ = driver.current_url
@@ -61,34 +113,20 @@ def _init_driver():
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-notifications")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
 
-    # Real monitor o'lchamiga o'xshash — 1366x768 eng keng tarqalgan
-    options.add_argument("--window-size=1366,768")
-
-    # Bot izlarini yashirish
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-browser-side-navigation")
-
-    # Real user-agent (Ubuntu Chrome 136)
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/136.0.0.0 Safari/537.36"
-    )
-
-    # Tilni o'rnatish — serverda default en-US bo'lishi mumkin
-    options.add_argument("--lang=uz-UZ,uz;q=0.9,en-US;q=0.8,en;q=0.7")
-
-    # Xvfb bilan render xatoliklarini oldini olish
-    options.add_argument("--disable-software-rasterizer")
-
-    # Chrome path
-    options.binary_location = "/opt/google/chrome/google-chrome"
+    # Chrome path — OSga qarab avtomatik aniqlanadi
+    # .env da CHROME_BINARY=/path/to/chrome qo'yilsa shu ishlatiladi
+    chrome_binary = _detect_chrome_binary()
+    if chrome_binary:
+        options.binary_location = chrome_binary
+        print(f"[driver] Chrome: {chrome_binary}")
+    else:
+        print("[driver] Chrome path topilmadi — undetected-chromedriver o'zi izlaydi")
 
     headless = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
     if headless:
@@ -101,6 +139,9 @@ def _init_driver():
         driver = uc.Chrome(options=options)
 
     driver.set_page_load_timeout(120)
+
+    # Oyna o'lchami: 700x700 — mobile layout chiqaradi, sayt shu holatda to'g'ri ishlaydi
+    driver.set_window_size(700, 700)
 
     # WebDriver belgisini JS darajasida o'chirish
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -261,23 +302,13 @@ def _open_details_modal(driver, row_el, layout: str | None) -> bool:
     return False
 
 
-# Warmup uchun saytlar zanjiri: biri ishlamasa keyingisi uriniladi
-_WARMUP_SITES = [
-    # (url, CSS selector, qidiruv so'z)
-    ("https://www.wikipedia.org", "#searchInput",    "O'zbekiston"),
-    ("https://www.google.com",    "input[name='q']", "python tutorial"),
-    ("https://duckduckgo.com",    "input[name='q']", "python tutorial"),
-]
-
-
 def _human_scroll(driver):
     """Sahifada inson kabi scroll qiladi."""
     try:
         for _ in range(random.randint(2, 4)):
             scroll_y = random.randint(200, 500)
             driver.execute_script(f"window.scrollBy(0, {scroll_y});")
-            time.sleep(random.uniform(0.3, 0.7))
-        # Qaytib yuqoriga
+            time.sleep(random.uniform(0.3, 0.8))
         driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(random.uniform(0.2, 0.5))
     except Exception:
@@ -288,7 +319,6 @@ def _human_mouse_move(driver):
     """Sahifada inson kabi mouse harakati."""
     try:
         action = ActionChains(driver)
-        # Ekranda bir necha nuqtaga siljitish
         for _ in range(random.randint(3, 6)):
             x = random.randint(100, 900)
             y = random.randint(100, 500)
@@ -299,65 +329,83 @@ def _human_mouse_move(driver):
         pass
 
 
+def _type_humanlike(element, text: str):
+    """Harfma-harf yozish — odam kabi."""
+    for ch in text:
+        element.send_keys(ch)
+        time.sleep(random.uniform(0.04, 0.16))
+
+
 def _warmup(driver) -> bool:
     """
-    Cloudflare bot-detection'ni aldash uchun oddiy saytlarda qisqa faoliyat ko'rsatadi.
-
-    Zanjir: Wikipedia → Google → DuckDuckGo
-    Har bir saytda: sahifaga kirish + qidirish + scroll + mouse harakat.
-    Biri xato bersa keyingisiga o'tadi.
-    Hammasi ishlamasa ham bot o'lmaydi.
-
-    SKIP_WARMUP=true bo'lsa butunlay o'tkazib yuboradi.
+    YouTube orqali warmup — bot detection'ni aldash uchun.
+    SKIP_WARMUP=true bo'lsa o'tkazib yuboradi.
     """
     if _env_bool("SKIP_WARMUP", default=False):
         print("[warmup] SKIP_WARMUP=true — o'tkazildi")
         return True
+    try:
+        print("[warmup] YouTube boshlandi...")
+        wait = WebDriverWait(driver, 35)
 
-    for url, selector, query in _WARMUP_SITES:
+        driver.get("https://www.youtube.com")
+        wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+        _human_delay(1.5, 2.5)
+
+        # Cookie/consent popup — "Accept all" yoki "Reject all" bosish
+        for consent_sel in [
+            "button[aria-label*='Accept']",
+            "button[aria-label*='agree']",
+            ".eom-buttons button:first-child",
+            "ytd-button-renderer:last-child button",
+        ]:
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, consent_sel)
+                btn.click()
+                _human_delay(0.8, 1.5)
+                break
+            except Exception:
+                continue
+
+        # Mouse bir necha joyga siljitish
+        _human_mouse_move(driver)
+
+        # Search box
+        box = wait.until(EC.presence_of_element_located((By.NAME, "search_query")))
+        _human_delay(0.5, 1.0)
+
+        # Search box ga click — ActionChains bilan, to'g'ri emas
+        ActionChains(driver).move_to_element(box).click().perform()
+        _human_delay(0.4, 0.8)
+
+        # Harfma-harf yozish
+        query = random.choice(["python tutorial", "uzbekistan", "music 2024", "news today"])
+        _type_humanlike(box, query)
+        _human_delay(0.6, 1.2)
+
+        box.send_keys(Keys.ENTER)
+
+        # Natijalar yuklanishini kut
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ytd-video-renderer, ytd-rich-item-renderer")))
+        _human_delay(1.5, 2.5)
+
+        # Scroll — natijalarni ko'rib chiqayotgan kabi
+        _human_scroll(driver)
+
+        # Birinchi video ustiga hover (click emas — tab/history ochilmasin)
         try:
-            print(f"[warmup] {url} urinilmoqda...")
-            wait = WebDriverWait(driver, 25)
-
-            driver.get(url)
-            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-            _human_delay(0.8, 1.5)
-
-            # Scroll — sahifa yuklangach biroz o'qigan kabi
-            _human_scroll(driver)
-
-            # Search box topib yozish
-            box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-
-            # Mouse harakati — to'g'ri bosmasdan avval
-            _human_mouse_move(driver)
-            _human_delay(0.3, 0.6)
-
-            box.click()
-            _human_delay(0.4, 0.8)
-
-            # Harfma-harf yozish — bot emas, odam kabi
-            for ch in query:
-                box.send_keys(ch)
-                time.sleep(random.uniform(0.05, 0.15))
-
-            _human_delay(0.5, 1.0)
-            box.send_keys(Keys.ENTER)
-            _human_delay(2.0, 3.5)
-
-            # Natijalar sahifasida ham scroll
-            _human_scroll(driver)
+            first_video = driver.find_element(By.CSS_SELECTOR, "ytd-video-renderer #thumbnail, ytd-rich-item-renderer #thumbnail")
+            ActionChains(driver).move_to_element(first_video).perform()
             _human_delay(1.0, 2.0)
+        except Exception:
+            pass
 
-            print(f"[warmup] OK: {url}")
-            return True
+        print("[warmup] YouTube OK")
+        return True
 
-        except Exception as e:
-            print(f"[warmup] {url} ishlamadi: {e} — keyingisi sinab ko'riladi...")
-            continue
-
-    print("[warmup] Hamma warmup saytlari ishlamadi — shunga qaramay davom etilmoqda")
-    return False
+    except Exception as e:
+        print(f"[warmup] YouTube xato: {e}")
+        return False
 
 
 # ── Sahifani ochish ───────────────────────────────────────────────────────────
