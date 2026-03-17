@@ -1,44 +1,57 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+# Kerakli paketlar
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    curl \
+    gnupg \
+    ca-certificates \
+    fonts-liberation \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libatk1.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxshmfence1 \
+    libglu1-mesa \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
+# Google Chrome install
+RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get update \
+    && apt-get install -y ./google-chrome-stable_current_amd64.deb \
+    && rm google-chrome-stable_current_amd64.deb
+
+# ChromeDriver (VERSION MOS!)
+RUN wget https://storage.googleapis.com/chrome-for-testing-public/146.0.7680.80/linux64/chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64*
+
+# Ishchi papka
 WORKDIR /app
 
-# System deps for Chrome + selenium/uc stability + virtual display (Xvfb)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg \
-      fonts-liberation \
-      xauth xvfb \
-      libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 \
-      libdrm2 libexpat1 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
-      libpangocairo-1.0-0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 \
-      libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxshmfence1 \
-      libxss1 libxtst6 lsb-release xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Google Chrome Stable
-RUN mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
+# Kodni copy qilish
+COPY . .
 
-COPY requirements.txt /app/requirements.txt
-RUN python -m pip install -r /app/requirements.txt
+# Python output buffer o‘chadi
+ENV PYTHONUNBUFFERED=1
 
-COPY . /app
-
-# Runtime defaults for container
-ENV IN_DOCKER=1 \
-    CHROME_HEADLESS=0 \
-    CHROME_PROFILE_DIR=/data/chrome_profile \
-    DISPLAY=:99
-
-VOLUME ["/data"]
-
-# Start virtual display, then bot (X11 server uchun -ac: access kontrol o'chiq)
-CMD ["/bin/sh", "-c", "Xvfb :99 -screen 0 1024x768x24 -ac > /dev/null 2>&1 & sleep 2 && python main.py"]
-
+# Run
+CMD ["python", "main.py"]
