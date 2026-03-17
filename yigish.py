@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime
 
-from kochirish import fetch_page
+from kochirish_html import fetch_page
 
 # ── Config ────────────────────────────────────────────────────────────────────
 current_dir = os.path.dirname(os.path.abspath(__file__))

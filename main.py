@@ -416,7 +416,7 @@ async def on_tekshirish(callback: CallbackQuery):
         global _busy
         try:
             await _update_status(status_msg, "🌐 Saytdan yangi ma'lumotlar yuklanmoqda...")
-            from kochirish import fetch_new_since
+            from kochirish_html import fetch_new_since
             new_certs = await loop.run_in_executor(None, fetch_new_since, int(last_number))
 
             if not new_certs:
@@ -526,7 +526,7 @@ async def _auto_check_loop():
             _busy = True
             loop = asyncio.get_event_loop()
 
-            from kochirish import fetch_new_since
+            from kochirish_html import fetch_new_since
             new_certs = await loop.run_in_executor(None, fetch_new_since, int(last_number))
 
             if not new_certs:
