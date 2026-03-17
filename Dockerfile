@@ -39,6 +39,6 @@ ENV IN_DOCKER=1 \
 
 VOLUME ["/data"]
 
-# Start virtual display, then bot
-CMD ["/bin/sh", "-c", "Xvfb :99 -screen 0 1024x768x24 & python main.py"]
+# Start virtual display, then bot (X11 server uchun -ac: access kontrol o'chiq)
+CMD ["/bin/sh", "-c", "Xvfb :99 -screen 0 1024x768x24 -ac > /dev/null 2>&1 & sleep 2 && python main.py"]
 
