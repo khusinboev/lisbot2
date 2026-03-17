@@ -1,0 +1,21 @@
+services:
+  lisbot:
+    build: .
+    container_name: lisbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      IN_DOCKER: "1"
+      CHROME_HEADLESS: "1"
+      CHROME_PROFILE_DIR: "/data/chrome_profile"
+      # Optional: set if uc has trouble auto-detecting Chrome major
+      # CHROME_VERSION_MAIN: "146"
+    volumes:
+      - lisbot_data:/data
+      # Optional: persist DB file on host instead of inside image layer
+      - ./licenses.db:/app/licenses.db
+
+volumes:
+  lisbot_data:
+

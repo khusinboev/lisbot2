@@ -1,0 +1,11 @@
+.venv
+.idea
+__pycache__/
+chrome_profile/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-wheel-metadata/
+*.db-journal
+
