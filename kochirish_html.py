@@ -68,6 +68,9 @@ def _init_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1024,768")
 
+    # To'g'ri Chrome path'ni qo'lda ko'rsat
+    options.binary_location = "/opt/google/chrome/google-chrome"
+
     headless = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
     if headless:
         options.add_argument("--headless=new")
