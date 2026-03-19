@@ -20,188 +20,118 @@ from typing import Optional
 
 from selenium.common.exceptions import SessionNotCreatedException
 
-SCRIPT_REV = "2026-03-19-r3"
+SCRIPT_REV = "2026-03-19-r4"
 
 
-# ── Inline bot detection bypass strategies ──────────────────────────────────
-def _fetch_via_curl_cffi_robust(page_num: int) -> Optional[dict]:
-    """curl_cffi with multiple impersonate profiles."""
+def _map_api_payload(data: dict, page_num: int) -> Optional[dict]:
+    if not isinstance(data, dict):
+        return None
+    if data.get("status_code") != 0:
+        return None
+
+    payload = data.get("data") or {}
+    certs = payload.get("certificates") or []
+    if not certs:
+        return None
+
+    mapped = []
+    for c in certs:
+        specs = c.get("specializations") or []
+        spec_oz = ""
+        if specs:
+            name_obj = specs[0].get("name") or {}
+            spec_oz = name_obj.get("oz") or name_obj.get("uz") or name_obj.get("ru") or ""
+        mapped.append({
+            "number": str(c.get("number", "")),
+            "name": (c.get("name") or "").strip(),
+            "active": bool(c.get("active", False)),
+            "tin": str(c.get("tin", "") or ""),
+            "specialization_oz": spec_oz,
+            "uuid": c.get("uuid"),
+            "page_num": page_num,
+        })
+
+    return {
+        "current_page": int(payload.get("currentPage", page_num)),
+        "all_pages": int(payload.get("totalPages", page_num + 1)),
+        "certificates": mapped,
+    }
+
+
+def _fetch_via_test1(page_num: int) -> Optional[dict]:
     try:
-        from curl_cffi import requests as cffi_requests
-
-        api_url = "https://api.licenses.uz/v1/register/open_source"
-        params = {
-            "document_id": 4409,
-            "document_type": "LICENSE",
-            "page": page_num,
-            "size": 10,
-        }
-
-        profiles = [("chrome124", "chrome124"), ("chrome120", "chrome120"), ("edge99", "edge99")]
-        user_agents = [
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        ]
-
-        for profile_idx, (profile_name, profile_literal) in enumerate(profiles):
-            ua = user_agents[profile_idx % len(user_agents)]
-            try:
-                print(f"[test.curl_cffi] Urinish {profile_idx + 1}/{len(profiles)}, profile={profile_name}")
-                session = cffi_requests.Session(impersonate=profile_literal)  # type: ignore
-                session.headers.update({
-                    "User-Agent": ua,
-                    "Accept": "application/json",
-                    "Accept-Language": "uz-UZ,uz;q=0.9",
-                    "Referer": "https://license.gov.uz/",
-                    "Origin": "https://license.gov.uz",
-                })
-
-                resp = session.get(api_url, params=params, timeout=20)
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("status_code") == 0 and data.get("data"):
-                        certs = data["data"].get("certificates", [])
-                        if certs:
-                            print(f"[test.curl_cffi] OK — {len(certs)} ta yozuv")
-                            return {
-                                "current_page": page_num,
-                                "all_pages": data["data"].get("totalPages", page_num + 2),
-                                "certificates": [
-                                    {
-                                        "number": str(c.get("number", "")),
-                                        "name": c.get("name", ""),
-                                        "active": c.get("active", False),
-                                        "tin": c.get("tin", 0),
-                                        "specialization_oz": (
-                                            c.get("specializations", [{}])[0].get("name", {}).get("oz", "")
-                                            if c.get("specializations") else ""
-                                        ),
-                                        "uuid": c.get("uuid"),
-                                        "page_num": page_num,
-                                    }
-                                    for c in certs
-                                ],
-                            }
-
-                elif resp.status_code in (429, 403, 401):
-                    print(f"[test.curl_cffi] HTTP {resp.status_code} — keyingi profile...")
-                    time.sleep(random.uniform(3, 6))
-                    continue
-
-            except Exception as e:
-                print(f"[test.curl_cffi] {profile_name} xato: {e}")
-                continue
-
-        return None
-    except ImportError:
-        print("[test.curl_cffi] curl_cffi o'rnatilmagan")
-        return None
-
-
-def _fetch_via_requests_spoofed(page_num: int) -> Optional[dict]:
-    """Requests library with header spoofing."""
-    try:
-        import requests
-
-        api_url = "https://api.licenses.uz/v1/register/open_source"
-        params = {
-            "document_id": 4409,
-            "document_type": "LICENSE",
-            "page": page_num,
-            "size": 10,
-        }
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "uz-UZ,uz;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Referer": "https://license.gov.uz/",
-            "Origin": "https://license.gov.uz",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-
-        print(f"[test.requests] page={page_num}")
-        session = requests.Session()
-        session.headers.update(headers)
-
-        resp = session.get(api_url, params=params, timeout=20)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("status_code") == 0 and data.get("data"):
-                certs = data["data"].get("certificates", [])
-                if certs:
-                    print(f"[test.requests] OK — {len(certs)} ta yozuv")
-                    return {
-                        "current_page": page_num,
-                        "all_pages": data["data"].get("totalPages", page_num + 2),
-                        "certificates": [
-                            {
-                                "number": str(c.get("number", "")),
-                                "name": c.get("name", ""),
-                                "active": c.get("active", False),
-                                "tin": c.get("tin", 0),
-                                "specialization_oz": (
-                                    c.get("specializations", [{}])[0].get("name", {}).get("oz", "")
-                                    if c.get("specializations") else ""
-                                ),
-                                "uuid": c.get("uuid"),
-                                "page_num": page_num,
-                            }
-                            for c in certs
-                        ],
-                    }
-
-        print(f"[test.requests] HTTP {resp.status_code}")
-        return None
-
-    except ImportError:
-        print("[test.requests] requests o'rnatilmagan")
-        return None
+        from test1 import fetch_page as api_fetch_page
     except Exception as e:
-        print(f"[test.requests] xato: {e}")
+        print(f"[test.api.test1] import xato: {e}")
         return None
 
-
-def _fetch_page_robust(page_num: int) -> Optional[dict]:
-    """Uchta yo'lni qator bilan sinab."""
-    strategies = [
-        ("curl_cffi", _fetch_via_curl_cffi_robust),
-        ("requests", _fetch_via_requests_spoofed),
-    ]
-
-    for name, strategy in strategies:
-        print(f"\n[test.robust] {name} urinish qilinmoqda...")
-        try:
-            result = strategy(page_num)
-            if result and result.get("certificates"):
-                print(f"[test.robust] ✓ {name} muvaffaqiyatli!")
-                return result
-        except Exception as e:
-            print(f"[test.robust] {name} xato: {e}")
-            time.sleep(1)
-
-    print("[test.robust] API yo'llar muvaffaqiyatsiz")
+    try:
+        data = api_fetch_page(page_num)
+        if data and data.get("certificates"):
+            print(f"[test.api.test1] OK certs={len(data.get('certificates', []))}")
+            return data
+    except Exception as e:
+        print(f"[test.api.test1] runtime xato: {e}")
     return None
 
 
-def _fetch_first_item_via_api(page_num: int) -> dict | None:
-    """API orqali birinchi yozuvni olish."""
+def _fetch_via_requests_compliant(page_num: int) -> Optional[dict]:
+    """Compliant API fetch: backoff + diagnostics, no stealth bypass tricks."""
     try:
-        # Agar tashqi modul mavjud bo'lsa, o'shani ishlatamiz.
-        from fetch_robust import fetch_page_robust as external_fetch_page_robust
+        import requests
+    except ImportError:
+        print("[test.api.requests] requests o'rnatilmagan")
+        return None
 
-        api_data = external_fetch_page_robust(page_num)
-    except Exception:
-        # Aks holda inline fallback strategiyalar ishlaydi.
-        api_data = _fetch_page_robust(page_num)
+    api_url = "https://api.licenses.uz/v1/register/open_source"
+    params_candidates = [
+        {"document_id": 4409, "document_type": "LICENSE", "page": page_num, "size": 10},
+        {"document_id": 4409, "document_type": "LICENSE", "page": page_num + 1, "size": 10},
+    ]
+
+    session = requests.Session()
+    session.headers.update({
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "uz-UZ,uz;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://license.gov.uz/",
+        "Origin": "https://license.gov.uz",
+        "User-Agent": "LisbotTest/1.0 (+https://license.gov.uz)",
+    })
+
+    delay = 2.0
+    for attempt in range(1, 5):
+        for params in params_candidates:
+            try:
+                print(f"[test.api.requests] attempt={attempt} params={params}")
+                resp = session.get(api_url, params=params, timeout=30)
+                if resp.status_code == 200:
+                    mapped = _map_api_payload(resp.json(), page_num)
+                    if mapped:
+                        print(f"[test.api.requests] OK certs={len(mapped['certificates'])}")
+                        return mapped
+                    print("[test.api.requests] 200 lekin payload bo'sh/yaroqsiz")
+                else:
+                    snippet = (resp.text or "")[:180].replace("\n", " ")
+                    print(f"[test.api.requests] HTTP={resp.status_code} body={snippet}")
+            except Exception as e:
+                print(f"[test.api.requests] xato: {e}")
+
+        time.sleep(delay + random.uniform(0.2, 0.7))
+        delay *= 1.7
+
+    return None
+
+
+def _fetch_page_compliant(page_num: int) -> Optional[dict]:
+    data = _fetch_via_test1(page_num)
+    if data:
+        return data
+    return _fetch_via_requests_compliant(page_num)
+
+
+def _fetch_first_item_via_api(page_num: int) -> dict | None:
+    """API orqali birinchi yozuvni olish (compliant, resilient)."""
+    api_data = _fetch_page_compliant(page_num)
     api_certs = api_data.get("certificates", []) if api_data else []
     if not api_data or not api_certs:
         return None
@@ -385,7 +315,7 @@ def main() -> int:
     print("[test] page=0 ochilib, birinchi element olinmoqda")
     print(f"[test] rev={SCRIPT_REV}")
 
-    mode = (os.getenv("TEST_MODE", "api") or "api").strip().lower()
+    mode = (os.getenv("TEST_MODE", "hybrid") or "hybrid").strip().lower()
     if mode not in {"api", "browser", "hybrid", "api-only"}:
         mode = "api"
     print(f"[test] TEST_MODE={mode}")
@@ -393,7 +323,7 @@ def main() -> int:
     data = None
     if mode in {"api", "hybrid", "api-only"}:
         try:
-            print("[test] API yo'li sinovdan o'tkazilmoqda (curl_cffi + requests + playwright)...")
+            print("[test] API yo'li sinovdan o'tkazilmoqda (compliant retry/backoff)...")
             data = _fetch_first_item_via_api(0)
             if data:
                 print("[test] API yo'li muvaffaqiyatli!")
