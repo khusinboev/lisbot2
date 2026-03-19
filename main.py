@@ -28,7 +28,7 @@ _main_loop: asyncio.AbstractEventLoop | None = None
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = set(int(uid.strip()) for uid in os.getenv("ALLOWED_USERS", "").split(",") if uid.strip())
-SPECIALIZATION_FILTER = "Олий таълим xizmatlari" if False else "Олий таълим хизматлари"
+SPECIALIZATION_FILTER = (os.getenv("SPECIALIZATION_FILTER", "Олий таълим хизматлари") or "Олий таълим хизматлари").strip()
 
 AUTO_CHECK_INTERVAL_SECONDS = 6 * 60 * 60  # 6 soat
 PDF_LANGUAGE = "uz"
