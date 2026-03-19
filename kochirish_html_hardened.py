@@ -15,6 +15,8 @@ import time
 from typing import Callable
 
 import undetected_chromedriver as uc
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -34,6 +36,7 @@ os.makedirs(ARTIFACT_DIR, exist_ok=True)
 
 _DRIVER = None
 _screenshot_callback: Callable[[str, str], None] | None = None
+_WARMUP_DONE = False
 
 # Ordered fallback selectors for row discovery.
 DESKTOP_ROW_SELECTORS = [
@@ -161,6 +164,37 @@ def _detect_chrome_binary() -> str | None:
     return None
 
 
+def _detect_firefox_binary() -> str | None:
+    import shutil
+    import sys
+
+    env_path = os.getenv("FIREFOX_BINARY", "").strip()
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    if sys.platform == "win32":
+        candidates = [
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            "/Applications/Firefox.app/Contents/MacOS/firefox",
+        ]
+    else:
+        candidates = [
+            "/usr/bin/firefox",
+            "/snap/bin/firefox",
+        ]
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    found = shutil.which("firefox")
+    return found
+
+
 def _is_driver_alive(driver):
     try:
         _ = driver.current_url
@@ -170,7 +204,52 @@ def _is_driver_alive(driver):
         return False
 
 
+def _warmup_mode() -> str:
+    raw = (os.getenv("WARMUP_MODE", "adaptive") or "adaptive").strip().lower()
+    if raw in {"never", "off", "disable", "0", "no"}:
+        return "never"
+    if raw in {"always", "on", "1", "yes"}:
+        return "always"
+    return "adaptive"
+
+
+def _init_firefox_driver():
+    options = FirefoxOptions()
+
+    # Firefox profile path (fallback: existing profile path envs).
+    ff_profile = os.getenv("FIREFOX_PROFILE_DIR") or os.getenv("CHROME_PROFILE_DIR") or profile_path
+    os.makedirs(ff_profile, exist_ok=True)
+    options.set_preference("profile", ff_profile)
+
+    options.set_preference("dom.webdriver.enabled", False)
+    options.set_preference("useAutomationExtension", False)
+    options.set_preference("media.peerconnection.enabled", False)
+
+    headless = _env_bool("FIREFOX_HEADLESS", default=_env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False)))
+    if headless:
+        options.add_argument("-headless")
+
+    firefox_binary = _detect_firefox_binary()
+    if firefox_binary:
+        options.binary_location = firefox_binary
+        print(f"[hardened.driver] Firefox: {firefox_binary}")
+    else:
+        print("[hardened.driver] Firefox path topilmadi, Selenium Manager ishlatiladi")
+
+    driver = webdriver.Firefox(options=options)
+    driver.set_page_load_timeout(120)
+    driver.set_window_size(900, 900)
+    return driver
+
+
 def _init_driver():
+    browser = (os.getenv("SCRAPER_BROWSER", "chrome") or "chrome").strip().lower()
+    if browser == "firefox":
+        try:
+            return _init_firefox_driver()
+        except Exception as e:
+            print(f"[hardened.driver] Firefox init xato, Chrome fallback: {e}")
+
     options = uc.ChromeOptions()
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--no-first-run")
@@ -217,11 +296,17 @@ def _init_driver():
 
 
 def _get_driver():
-    global _DRIVER
+    global _DRIVER, _WARMUP_DONE
     if _DRIVER is not None and _is_driver_alive(_DRIVER):
         return _DRIVER
+
     _DRIVER = _init_driver()
-    _warmup(_DRIVER)
+    _WARMUP_DONE = False
+
+    mode = _warmup_mode()
+    if not _env_bool("SKIP_WARMUP", default=False) and mode == "always":
+        _WARMUP_DONE = _warmup(_DRIVER)
+
     return _DRIVER
 
 
@@ -422,26 +507,12 @@ def _wait_for_rows(driver, timeout=45) -> tuple[bool, str, dict]:
     deadline = time.time() + timeout
     last_reason = "timeout_no_rows"
     last_state = {"rows": 0}
-    saw_loading_phase = False
-    saw_ready_no_rows = False
-    extended_for_loading = False
-    extended_for_ready = False
 
-    late_grace = _env_int("LATE_LIST_GRACE_SECONDS")
-    if late_grace is None or late_grace < 5:
-        late_grace = 30
-
-    while True:
+    while time.time() < deadline:
         try:
             state = _detect_page_state(driver)
             last_state = state
             last_reason = state.get("reason", "timeout_no_rows")
-
-            if last_reason in {"app_loading", "dom_not_ready"}:
-                saw_loading_phase = True
-            elif last_reason in {"timeout_no_rows", "selector_mismatch_or_empty_state", "app_shell_not_ready"}:
-                saw_ready_no_rows = True
-
             if state.get("rows", 0) > 0:
                 return True, "ok", state
             if state.get("challenge") and state.get("reason") == "blocked_or_challenge":
@@ -450,21 +521,6 @@ def _wait_for_rows(driver, timeout=45) -> tuple[bool, str, dict]:
         except Exception as e:
             last_reason = "network_or_dom_error"
             last_state = {"rows": 0, "error": str(e)}
-
-        now = time.time()
-        if now >= deadline:
-            # App loading bo'lganidan keyin list kech paydo bo'lishini hisobga olamiz.
-            if saw_loading_phase and not extended_for_loading:
-                deadline = now + late_grace
-                extended_for_loading = True
-                print(f"[hardened] rows wait extended (+{late_grace}s): loading phase detected")
-            elif saw_ready_no_rows and not extended_for_ready:
-                deadline = now + late_grace
-                extended_for_ready = True
-                print(f"[hardened] rows wait extended (+{late_grace}s): app ready but rows delayed")
-            else:
-                break
-
         time.sleep(1.0)
 
     return False, last_reason, last_state
@@ -566,25 +622,16 @@ def _warmup(driver) -> bool:
 
 
 def _open_page(driver, page_num: int) -> tuple[bool, str]:
+    global _WARMUP_DONE
+
     url = f"{BASE_URL}{FILTER_PARAMS}&page={page_num + 1}"
     print(f"[hardened] URL ochilmoqda: {url}")
 
     # Exponential backoff + jitter.
     retry_wait = [3.0, 8.0, 20.0]
     last_reason = "timeout_no_rows"
-    boot_timeout = _env_int("APP_BOOT_TIMEOUT_SECONDS")
-    if boot_timeout is None or boot_timeout < 10:
-        boot_timeout = 50
-
-    row_timeout = _env_int("ROW_WAIT_TIMEOUT_SECONDS")
-    if row_timeout is None or row_timeout < 20:
-        row_timeout = 95
-
-    same_attempt_grace = _env_int("SAME_ATTEMPT_LOADING_GRACE_SECONDS")
-    if same_attempt_grace is None or same_attempt_grace < 10:
-        same_attempt_grace = 60
-
-    loading_reasons = {"app_loading", "dom_not_ready", "app_shell_not_ready"}
+    warmup_mode = _warmup_mode()
+    can_adaptive_warmup = warmup_mode == "adaptive" and not _env_bool("SKIP_WARMUP", default=False)
 
     for attempt in range(3):
         try:
@@ -592,14 +639,7 @@ def _open_page(driver, page_num: int) -> tuple[bool, str]:
         except Exception as e:
             print(f"[hardened] driver.get xato (attempt {attempt + 1}/3): {e}")
 
-        boot_ok, boot_reason = _wait_for_app_bootstrap(driver, timeout=boot_timeout)
-        if not boot_ok and boot_reason in loading_reasons:
-            print(
-                f"[hardened] app hali yuklanmoqda (attempt {attempt + 1}/3), "
-                f"same-attempt extra wait {same_attempt_grace}s"
-            )
-            boot_ok, boot_reason = _wait_for_app_bootstrap(driver, timeout=same_attempt_grace)
-
+        boot_ok, boot_reason = _wait_for_app_bootstrap(driver, timeout=40)
         if not boot_ok:
             last_reason = boot_reason
             label = f"boot_fail_p{page_num}_try{attempt + 1}_{boot_reason}"
@@ -619,14 +659,7 @@ def _open_page(driver, page_num: int) -> tuple[bool, str]:
                     pass
             continue
 
-        ok, reason, state = _wait_for_rows(driver, timeout=row_timeout)
-        if not ok and reason in loading_reasons:
-            print(
-                f"[hardened] list hali loading (attempt {attempt + 1}/3), "
-                f"same-attempt extra wait {same_attempt_grace}s"
-            )
-            ok, reason, state = _wait_for_rows(driver, timeout=same_attempt_grace)
-
+        ok, reason, state = _wait_for_rows(driver, timeout=65)
         last_reason = reason
         if ok:
             _human_delay(0.6, 1.2)
@@ -636,6 +669,13 @@ def _open_page(driver, page_num: int) -> tuple[bool, str]:
                 f"✅ Page {page_num + 1} yuklandi (attempt {attempt + 1}/3)",
             )
             return True, "ok"
+
+        if reason == "blocked_or_challenge" and can_adaptive_warmup and not _WARMUP_DONE:
+            print("[hardened] blocked/challenge ko'rindi, adaptive warmup ishga tushdi...")
+            _WARMUP_DONE = _warmup(driver)
+            print(f"[hardened] adaptive warmup natijasi: {_WARMUP_DONE}")
+            # Warmupdan keyin keyingi urinishda shu page qayta ochiladi.
+            continue
 
         label = f"fail_p{page_num}_try{attempt + 1}_{reason}"
         shot_path, html_path = _take_artifacts(driver, label)
