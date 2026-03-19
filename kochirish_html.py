@@ -111,16 +111,15 @@ def _is_driver_alive(driver):
 def _init_driver():
     global _DRIVER
 
-    # === Xvfb — virtual monitor (headless fingerprintni butunlay o'chiradi) ===
+    # Xvfb
     virtual_display = None
     headless_env = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
 
     if headless_env:
-        print("[driver] Ubuntu server → Xvfb virtual display yoqilmoqda (real monitor kabi ko'rinadi)")
+        print("[driver] Xvfb virtual display yoqilmoqda")
         virtual_display = Display(visible=0, size=(1920, 1080), backend="xvfb")
         virtual_display.start()
 
-    # === Chrome Options (eng kuchli konfiguratsiya) ===
     options = uc.ChromeOptions()
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--no-first-run")
@@ -130,28 +129,44 @@ def _init_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-features=IsolateOrigins,site-per-process")
     options.add_argument("--window-size=1920,1080")
 
-    # Real 2026 User-Agent
+    # User-agent
     options.add_argument(
-        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
-    )
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
 
-    # options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    # options.add_experimental_option("useAutomationExtension", False)
+    # Chrome binary
+    chrome_path = _detect_chrome_binary()
+    if chrome_path:
+        options.binary_location = chrome_path
+        print(f"[driver] Chrome binary: {chrome_path}")
 
-    # Agar Xvfb bo'lsa — headless flag qo'ymaymiz (eng muhim!)
-    if headless_env and not virtual_display:
-        options.add_argument("--headless=new")
-
-    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-
-    # === Driver yaratish ===
+    # Versiyani aniqlash
     version_main = _env_int("CHROME_VERSION_MAIN")
-    driver = uc.Chrome(version_main=version_main, options=options) if version_main else uc.Chrome(options=options)
+    if version_main is None:
+        try:
+            import subprocess
+            result = subprocess.run([chrome_path or 'google-chrome', '--version'],
+                                    capture_output=True, text=True, timeout=10)
+            version_str = result.stdout.strip().split()[-1]  # "146.0.7680.80"
+            version_main = int(version_str.split('.')[0])
+            print(f"[driver] Auto-detected Chrome version: {version_main}")
+        except Exception as e:
+            print(f"[driver] Could not detect version: {e}")
+            version_main = None  # UC o'zi topadi
+
+    # Driver yaratish
+    try:
+        if version_main:
+            print(f"[driver] Using Chrome version_main={version_main}")
+            driver = uc.Chrome(version_main=version_main, options=options)
+        else:
+            print(f"[driver] Using auto-detected Chrome version")
+            driver = uc.Chrome(options=options)
+    except Exception as e:
+        print(f"[driver] Failed with version {version_main}: {e}")
+        print(f"[driver] Retrying with auto-detect...")
+        driver = uc.Chrome(options=options)
 
     driver.set_page_load_timeout(120)
     driver.set_window_size(1920, 1080)
