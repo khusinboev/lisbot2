@@ -140,8 +140,8 @@ def _init_driver():
         "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
     )
 
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+    # options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    # options.add_experimental_option("useAutomationExtension", False)
 
     # Agar Xvfb bo'lsa — headless flag qo'ymaymiz (eng muhim!)
     if headless_env and not virtual_display:
