@@ -19,6 +19,24 @@ from datetime import datetime
 from selenium.common.exceptions import SessionNotCreatedException
 
 
+def _fetch_first_item_via_api(page_num: int) -> dict | None:
+    """API (curl_cffi) orqali birinchi yozuvni olish."""
+    from test1 import fetch_page as api_fetch_page
+
+    api_data = api_fetch_page(page_num)
+    api_certs = api_data.get("certificates", []) if api_data else []
+    if not api_data or not api_certs:
+        return None
+
+    return {
+        "current_page": api_data.get("current_page"),
+        "all_pages": api_data.get("all_pages"),
+        "certificates_count": len(api_certs),
+        "first_item": api_certs[0],
+        "source": "api",
+    }
+
+
 def _fetch_first_item_with_fresh_profile(page_num: int) -> dict | None:
     """Har urinishda yangi Chrome profile bilan faqat birinchi elementni oladi."""
     max_attempts = 2
@@ -103,20 +121,11 @@ def _fetch_first_item_with_fresh_profile(page_num: int) -> dict | None:
 
                 # DOM bo'sh qolsa API fallback (curl_cffi) orqali birinchi yozuvni olamiz.
                 try:
-                    from test1 import fetch_page as api_fetch_page
-
                     print("[test] API fallback ishga tushdi (test1.fetch_page)")
-                    api_data = api_fetch_page(page_num)
-                    api_certs = api_data.get("certificates", []) if api_data else []
-                    if api_data and api_certs:
-                        first_api = api_certs[0]
-                        return {
-                            "current_page": api_data.get("current_page"),
-                            "all_pages": api_data.get("all_pages"),
-                            "certificates_count": len(api_certs),
-                            "first_item": first_api,
-                            "source": "api_fallback",
-                        }
+                    api_payload = _fetch_first_item_via_api(page_num)
+                    if api_payload:
+                        api_payload["source"] = "api_fallback"
+                        return api_payload
                 except Exception as fallback_err:
                     print(f"[test] API fallback xato: {fallback_err}")
 
@@ -169,19 +178,11 @@ def _fetch_first_item_with_fresh_profile(page_num: int) -> dict | None:
 
             # Runtime xatoda API fallbackga urinib ko'ramiz.
             try:
-                from test1 import fetch_page as api_fetch_page
                 print("[test] Kutilmagan xatodan keyin API fallback ishga tushdi")
-                api_data = api_fetch_page(page_num)
-                api_certs = api_data.get("certificates", []) if api_data else []
-                if api_data and api_certs:
-                    first_api = api_certs[0]
-                    return {
-                        "current_page": api_data.get("current_page"),
-                        "all_pages": api_data.get("all_pages"),
-                        "certificates_count": len(api_certs),
-                        "first_item": first_api,
-                        "source": "api_fallback_after_error",
-                    }
+                api_payload = _fetch_first_item_via_api(page_num)
+                if api_payload:
+                    api_payload["source"] = "api_fallback_after_error"
+                    return api_payload
             except Exception as fallback_err:
                 print(f"[test] API fallback ham xato: {fallback_err}")
 
@@ -205,7 +206,25 @@ def main() -> int:
     print(f"[{datetime.now().isoformat()}] Test boshlandi...")
     print("[test] page=0 ochilib, birinchi element olinmoqda")
 
-    data = _fetch_first_item_with_fresh_profile(0)
+    mode = (os.getenv("TEST_MODE", "hybrid") or "hybrid").strip().lower()
+    if mode not in {"api", "browser", "hybrid"}:
+        mode = "hybrid"
+    print(f"[test] TEST_MODE={mode}")
+
+    data = None
+    if mode in {"api", "hybrid"}:
+        try:
+            print("[test] API yo'li sinovdan o'tkazilmoqda...")
+            data = _fetch_first_item_via_api(0)
+            if data:
+                print("[test] API yo'li muvaffaqiyatli")
+        except Exception as e:
+            print(f"[test] API yo'li xato: {e}")
+
+    if data is None and mode in {"browser", "hybrid"}:
+        print("[test] Browser yo'li ishga tushmoqda...")
+        data = _fetch_first_item_with_fresh_profile(0)
+
     if data is None:
         print("[test] Xato: sahifadan ma'lumot olinmadi")
         return 1

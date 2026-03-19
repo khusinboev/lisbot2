@@ -66,6 +66,9 @@ HARD_CHALLENGE_SELECTORS = [
 APP_LOADING_SELECTORS = [
     ".Splash_wrapper__2X9p7",
     "[class*='Splash_wrapper']",
+    "[class*='spinner']",
+    "[class*='Spinner']",
+    "[aria-busy='true']",
 ]
 
 
@@ -633,13 +636,16 @@ def _open_page(driver, page_num: int) -> tuple[bool, str]:
     warmup_mode = _warmup_mode()
     can_adaptive_warmup = warmup_mode == "adaptive" and not _env_bool("SKIP_WARMUP", default=False)
 
+    boot_timeout = _env_int("APP_BOOT_TIMEOUT_SECONDS") or 40
+    row_timeout = _env_int("ROW_WAIT_TIMEOUT_SECONDS") or 65
+
     for attempt in range(3):
         try:
             driver.get(url)
         except Exception as e:
             print(f"[hardened] driver.get xato (attempt {attempt + 1}/3): {e}")
 
-        boot_ok, boot_reason = _wait_for_app_bootstrap(driver, timeout=40)
+        boot_ok, boot_reason = _wait_for_app_bootstrap(driver, timeout=boot_timeout)
         if not boot_ok:
             last_reason = boot_reason
             label = f"boot_fail_p{page_num}_try{attempt + 1}_{boot_reason}"
@@ -659,7 +665,7 @@ def _open_page(driver, page_num: int) -> tuple[bool, str]:
                     pass
             continue
 
-        ok, reason, state = _wait_for_rows(driver, timeout=65)
+        ok, reason, state = _wait_for_rows(driver, timeout=row_timeout)
         last_reason = reason
         if ok:
             _human_delay(0.6, 1.2)
