@@ -15,7 +15,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
+from pyvirtualdisplay import Display
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL = "https://license.gov.uz/registry"
@@ -109,6 +109,18 @@ def _is_driver_alive(driver):
 
 
 def _init_driver():
+    global _DRIVER
+
+    # === Xvfb — virtual monitor (headless fingerprintni butunlay o'chiradi) ===
+    virtual_display = None
+    headless_env = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
+
+    if headless_env:
+        print("[driver] Ubuntu server → Xvfb virtual display yoqilmoqda (real monitor kabi ko'rinadi)")
+        virtual_display = Display(visible=0, size=(1920, 1080), backend="xvfb")
+        virtual_display.start()
+
+    # === Chrome Options (eng kuchli konfiguratsiya) ===
     options = uc.ChromeOptions()
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--no-first-run")
@@ -118,42 +130,86 @@ def _init_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+    options.add_argument("--window-size=1920,1080")
 
-    # Chrome path — OSga qarab avtomatik aniqlanadi
-    # .env da CHROME_BINARY=/path/to/chrome qo'yilsa shu ishlatiladi
-    chrome_binary = _detect_chrome_binary()
-    if chrome_binary:
-        options.binary_location = chrome_binary
-        print(f"[driver] Chrome: {chrome_binary}")
-    else:
-        print("[driver] Chrome path topilmadi — undetected-chromedriver o'zi izlaydi")
+    # Real 2026 User-Agent
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    )
 
-    headless = _env_bool("CHROME_HEADLESS", default=_env_bool("IN_DOCKER", default=False))
-    if headless:
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+
+    # Agar Xvfb bo'lsa — headless flag qo'ymaymiz (eng muhim!)
+    if headless_env and not virtual_display:
         options.add_argument("--headless=new")
 
+    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
+    # === Driver yaratish ===
     version_main = _env_int("CHROME_VERSION_MAIN")
-    if version_main is not None:
-        driver = uc.Chrome(version_main=version_main, options=options)
-    else:
-        driver = uc.Chrome(options=options)
+    driver = uc.Chrome(version_main=version_main, options=options) if version_main else uc.Chrome(options=options)
 
     driver.set_page_load_timeout(120)
+    driver.set_window_size(1920, 1080)
 
-    # Oyna o'lchami: 700x700 — mobile layout chiqaradi, sayt shu holatda to'g'ri ishlaydi
-    driver.set_window_size(700, 700)
-
-    # WebDriver belgisini JS darajasida o'chirish
+    # === Ultimate JS Spoof (canvas + webgl + audio + navigator) ===
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['uz-UZ', 'uz', 'en-US', 'en'] });
-            window.chrome = { runtime: {} };
+            delete navigator.__proto__.webdriver;
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['uz-UZ','ru','en-US','en']});
+            Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+            Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+
+            // Canvas noise (eng kuchli anti-detection)
+            const origGetContext = HTMLCanvasElement.prototype.getContext;
+            HTMLCanvasElement.prototype.getContext = function(type) {
+                const ctx = origGetContext.apply(this, arguments);
+                if (type === '2d') {
+                    const origFillText = ctx.fillText;
+                    ctx.fillText = function(text, x, y) {
+                        arguments[0] = text + String.fromCharCode(97 + Math.random()*26|0);
+                        return origFillText.apply(this, arguments);
+                    };
+                }
+                return ctx;
+            };
+
+            // WebGL spoof
+            const origGetParam = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(p) {
+                if (p === 37445) return 'Intel Inc.';
+                if (p === 37446) return 'Intel Iris OpenGL Engine';
+                return origGetParam.apply(this, arguments);
+            };
         """
     })
 
+    # Xvfb ni driver bilan bog'laymiz (to'g'ri yopish uchun)
+    driver._virtual_display = virtual_display
+
+    print("[driver] ✅ PRO anti-bot (Xvfb + full spoof) yoqildi")
     return driver
+
+
+def _quit_driver():
+    global _DRIVER
+    if _DRIVER:
+        try:
+            if hasattr(_DRIVER, '_virtual_display') and _DRIVER._virtual_display:
+                _DRIVER._virtual_display.stop()
+        except:
+            pass
+        try:
+            _DRIVER.quit()
+        except:
+            pass
+        _DRIVER = None
 
 
 def _get_driver():

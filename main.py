@@ -27,8 +27,26 @@ _main_loop: asyncio.AbstractEventLoop | None = None
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALLOWED_USERS = set(int(uid.strip()) for uid in os.getenv("ALLOWED_USERS", "").split(",") if uid.strip())
+
+
+def _parse_allowed_users(raw: str) -> set[int]:
+    parsed: set[int] = set()
+    for item in raw.split(","):
+        text = item.strip()
+        if not text:
+            continue
+        try:
+            parsed.add(int(text))
+        except ValueError:
+            logging.warning("ALLOWED_USERS ichida noto'g'ri qiymat tashlab yuborildi: %s", text)
+    return parsed
+
+
+ALLOWED_USERS = _parse_allowed_users(os.getenv("ALLOWED_USERS", ""))
 SPECIALIZATION_FILTER = (os.getenv("SPECIALIZATION_FILTER", "Олий таълим хизматлари") or "Олий таълим хизматлари").strip()
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN .env da berilmagan")
 
 AUTO_CHECK_INTERVAL_SECONDS = 6 * 60 * 60  # 6 soat
 PDF_LANGUAGE = "uz"
@@ -529,14 +547,14 @@ async def on_tekshirish(callback: CallbackQuery):
     loop = asyncio.get_event_loop()
 
     # Screenshot callback — scraper holatini real-time ko'rsatadi
-    from kochirish_html_hardened import set_screenshot_callback
+    from kochirish_html import set_screenshot_callback
     set_screenshot_callback(_make_screenshot_callback(callback.from_user.id))
 
     async def check_new():
         global _busy
         try:
             await _update_status(status_msg, "🌐 Saytdan yangi ma'lumotlar yuklanmoqda...")
-            from kochirish_html_hardened import fetch_new_since
+            from kochirish_html import fetch_new_since
             new_certs = await loop.run_in_executor(None, fetch_new_since, existing_numbers)
 
             if not new_certs:
@@ -637,7 +655,7 @@ async def _auto_check_loop():
             _busy = True
             loop = asyncio.get_event_loop()
 
-            from kochirish_html_hardened import fetch_new_since
+            from kochirish_html import fetch_new_since
             new_certs = await loop.run_in_executor(None, fetch_new_since, existing_numbers)
 
             if not new_certs:
