@@ -20,10 +20,10 @@ from selenium.common.exceptions import SessionNotCreatedException
 
 
 def _fetch_first_item_via_api(page_num: int) -> dict | None:
-    """API (curl_cffi) orqali birinchi yozuvni olish."""
-    from test1 import fetch_page as api_fetch_page
+    """API orqali birinchi yozuvni olish (curl_cffi + requests + fallbacks)."""
+    from fetch_robust import fetch_page_robust
 
-    api_data = api_fetch_page(page_num)
+    api_data = fetch_page_robust(page_num)
     api_certs = api_data.get("certificates", []) if api_data else []
     if not api_data or not api_certs:
         return None
@@ -206,23 +206,27 @@ def main() -> int:
     print(f"[{datetime.now().isoformat()}] Test boshlandi...")
     print("[test] page=0 ochilib, birinchi element olinmoqda")
 
-    mode = (os.getenv("TEST_MODE", "hybrid") or "hybrid").strip().lower()
-    if mode not in {"api", "browser", "hybrid"}:
-        mode = "hybrid"
+    mode = (os.getenv("TEST_MODE", "api") or "api").strip().lower()
+    if mode not in {"api", "browser", "hybrid", "api-only"}:
+        mode = "api"
     print(f"[test] TEST_MODE={mode}")
 
     data = None
-    if mode in {"api", "hybrid"}:
+    if mode in {"api", "hybrid", "api-only"}:
         try:
-            print("[test] API yo'li sinovdan o'tkazilmoqda...")
+            print("[test] API yo'li sinovdan o'tkazilmoqda (curl_cffi + requests + playwright)...")
             data = _fetch_first_item_via_api(0)
             if data:
-                print("[test] API yo'li muvaffaqiyatli")
+                print("[test] API yo'li muvaffaqiyatli!")
         except Exception as e:
             print(f"[test] API yo'li xato: {e}")
 
+    if data is None and mode == "api-only":
+        print("[test] api-only rejimida API muvaffaqiyatsiz, natijasiz qaytish")
+        return 1
+
     if data is None and mode in {"browser", "hybrid"}:
-        print("[test] Browser yo'li ishga tushmoqda...")
+        print("[test] Browser yo'li ishga tushmoqda (fallback)...")
         data = _fetch_first_item_with_fresh_profile(0)
 
     if data is None:

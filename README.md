@@ -81,11 +81,21 @@ docker compose restart
 ## Ubuntu'da qo'lda test (Docker'siz)
 
 Ba'zan serverda browser ochiladi, lekin SPA jadval qatorlari kech chiqadi yoki umuman ko'rinmaydi.
-Shu uchun test scriptda uchta rejim bor:
+API ham bot detected qo'linishi mumkin. Shu uchun test scriptda to'rt rejim bor:
 
-- `TEST_MODE=api` — eng barqaror (curl_cffi API yo'li)
+- `TEST_MODE=api` — **eng barqaror**: curl_cffi + requests + playwright (API va browser hybrid)
+- `TEST_MODE=api-only` — faqat API (curl_cffi + requests + playwright), browser yo'qotilgan
 - `TEST_MODE=browser` — faqat Selenium yo'li
-- `TEST_MODE=hybrid` — avval API, kerak bo'lsa browser (default)
+- `TEST_MODE=hybrid` — avval API, kerak bo'lsa browser (legacy fallback)
+
+### Bot detection bypass strategiyalari:
+
+Yangi `fetch_robust.py` moduli uchta yo'ldan urinadi (ketma-ket):
+1. **curl_cffi** — 3 ta berbeda impersonate profili + header rotation (chrome124, chrome120, safari)
+2. **requests** — standart requests bilan sophisticated header spoofing
+3. **Playwright** — headless chromium (Selenium'dan mustaqil)
+
+Ikhtar API blok qilinsa, avtomatik keyingi yo'lga o'tadi.
 
 ### 1) Kerakli paketlar
 
@@ -132,8 +142,19 @@ ROW_WAIT_TIMEOUT_SECONDS=90
 ### 5) Test run
 
 ```bash
+# API yo'li orqali (barqaror)
 python test_first_item.py
+
+# Yoki aniq rejim bilan
+TEST_MODE=api-only python test_first_item.py
+TEST_MODE=api python test_first_item.py
+TEST_MODE=browser python test_first_item.py
+TEST_MODE=hybrid python test_first_item.py
 ```
+
+Mahalliy vs datacenter IP:
+- Datacenter IP bot detection kosha, `TEST_MODE=api` o'ng keladimi.
+- Agar `api-only` muvaffaqiyatsiz bo'lsa, hybrid yoki browser sinovdan o'tkazing.
 
 ### 6) Browser oynasini ko'rib test qilish (xvfb)
 
@@ -144,8 +165,33 @@ CHROME_HEADLESS=false TEST_MODE=browser xvfb-run -a python test_first_item.py
 
 ### 7) Serverda barqarorlik bo'yicha tavsiyalar
 
-- Datacenter IP ba'zan JS/Selenium oqimini sekinlatadi: `TEST_MODE=hybrid` yoki `TEST_MODE=api` ishlating.
+- Datacenter IP ba'zan JS/Selenium oqimini sekinlatadi: `TEST_MODE=api` yoki `TEST_MODE=api-only` ishlating.
+- `api` yo'li muvaffaqiyatsiz bo'lsa, `api-only` rejimida `SKIP_WARMUP=false` + `WARMUP_MODE=always` bilan sinab ko'ring.
 - Browser yo'lida osilib qolsa `_debug_artifacts/` dagi screenshot/html ni tahlil qiling.
 - Chrome/driver moslashmasa `CHROME_VERSION_MAIN` ni qo'lda bering.
 - Ko'p parallel run qilmang; bitta run tugaguncha keyingisini boshlamang.
+
+---
+
+## Turli API/Browser yo'llarini tezkor test qilish
+
+Isimsiz bash script:
+
+```bash
+#!/bin/bash
+set -e
+
+source venv/bin/activate
+
+echo "=== TEST MODE: API-ONLY ==="
+timeout 60 python test_first_item.py || echo "API-ONLY muvaffaqiyatsiz"
+
+echo -e "\n=== TEST MODE: API ==="
+timeout 60 env TEST_MODE=api python test_first_item.py || echo "API muvaffaqiyatsiz"
+
+echo -e "\n=== TEST MODE: HYBRID ==="
+timeout 60 env TEST_MODE=hybrid python test_first_item.py || echo "HYBRID muvaffaqiyatsiz"
+
+echo -e "\n=== Done ==="
+```
 
