@@ -6,7 +6,6 @@ import sqlite3
 import threading
 import os
 import time
-from datetime import datetime
 
 from kochirish_html import fetch_page
 
@@ -16,7 +15,6 @@ DB_PATH = os.path.join(current_dir, "licenses.db")
 
 # Bir vaqtda faqat 1ta yig'ish jarayoni
 _collect_lock = threading.Lock()
-_collect_running = False
 
 
 # ── 1. Baza va tablelarni tayyorlash ─────────────────────────────────────────
@@ -131,8 +129,6 @@ def collect_all(status_callback=None):
     Bir vaqtda faqat 1ta jarayon ishlaydi.
     status_callback(msg: str) — jonli holat xabarlari uchun (ixtiyoriy).
     """
-    global _collect_running
-
     # Parallel ishga tushirishni bloklash
     if not _collect_lock.acquire(blocking=False):
         msg = "[yigish] Jarayon allaqachon ketayapti — bekor qilindi"
@@ -140,8 +136,6 @@ def collect_all(status_callback=None):
         if status_callback:
             status_callback(msg)
         return False
-
-    _collect_running = True
 
     def _log(msg):
         print(msg)
@@ -214,7 +208,6 @@ def collect_all(status_callback=None):
         return False
 
     finally:
-        _collect_running = False
         _collect_lock.release()
 
 

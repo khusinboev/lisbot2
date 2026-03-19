@@ -270,17 +270,19 @@ async def _safe_send_photo(chat_id: int, photo_path: str, caption: str):
     """Screenshot faylini Telegram ga yuboradi."""
     try:
         from aiogram.types import FSInputFile
-        photo = FSInputFile(photo_path)
-        await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, parse_mode="HTML")
-    except TelegramRetryAfter as e:
-        await asyncio.sleep(int(e.retry_after) + 1)
-        await _safe_send_photo(chat_id, photo_path, caption)
-    except Exception as e:
-        print(f"[screenshot] send_photo xato: {e}")
+        while True:
+            try:
+                photo = FSInputFile(photo_path)
+                await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, parse_mode="HTML")
+                break
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(int(e.retry_after) + 1)
+            except Exception as e:
+                print(f"[screenshot] send_photo xato: {e}")
+                break
     finally:
         # Faylni yuborilgandan keyin o'chirish
         try:
-            import os
             if os.path.exists(photo_path):
                 os.remove(photo_path)
         except Exception:
@@ -524,7 +526,7 @@ async def on_tekshirish(callback: CallbackQuery):
     if cert_count == 0:
         try:
             await callback.message.delete()
-        except:
+        except Exception:
             pass
         await callback.message.answer(
             "⚠️ Hali ma'lumot yo'q.\n\nAvval 🟢 <b>Mavjudlar</b> tugmasini bosing.",

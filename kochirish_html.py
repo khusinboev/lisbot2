@@ -203,11 +203,11 @@ def _quit_driver():
         try:
             if hasattr(_DRIVER, '_virtual_display') and _DRIVER._virtual_display:
                 _DRIVER._virtual_display.stop()
-        except:
+        except Exception:
             pass
         try:
             _DRIVER.quit()
-        except:
+        except Exception:
             pass
         _DRIVER = None
 

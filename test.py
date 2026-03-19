@@ -1,20 +1,10 @@
 """
-test.py — Loyihani to'liq test qilish (pro daraja anti-bot)
+test.py — bitta sahifadan birinchi yozuvni tekshiruvchi smoke-test.
 
-Bu fayl loyihadagi barcha scraping modulini (kochirish_html.py dagi mukammal hardened versiya)
-to'liq ishga tushirib, faqat BITTA sahifadan (page 0) ma'lumot yig'adi va
-faqat BIRINCHI sertifikatni batafsil print qiladi.
-
-Nima qiladi:
-- Driverni pro darajada anti-bot bilan ishga tushiradi (YouTube warmup, human mouse/scroll/typing,
-  navigator spoofing, canvas/WebGL fingerprint protection, random delays, binary detection va boshqalar)
-- Sahifani ochadi, ro'yxatni kutadi, modalga kirib UUID + to'liq ma'lumotlarni oladi
-- Natijani JSON + pprint bilan chiqaradi (copy-paste uchun qulay)
-
-Ishga tushirish:
-    python test.py
-
-Hech qanday Telegram, DB yoki boshqa modul kerak emas — toza standalone test.
+Bu test scraperning asosiy oqimini tekshiradi:
+- page=0 uchun fetch_page chaqiradi,
+- ro'yxat qaytganini tekshiradi,
+- birinchi yozuvni JSON va pprint ko'rinishida chiqaradi.
 """
 
 import os
@@ -29,10 +19,10 @@ from kochirish_html import fetch_page, set_screenshot_callback
 # Screenshot callbackni o'chirib qo'yamiz (testda kerak emas)
 set_screenshot_callback(None)
 
-def run_pro_test():
+def run_smoke_test():
     print("=" * 80)
-    print("🚀 PRO ANTI-BOT TEST BOSHLANDI")
-    print("   (YouTube warmup + human actions + navigator spoof + fingerprint protection)")
+    print("🚀 SMOKE TEST BOSHLANDI")
+    print("   (fetch_page(0) va birinchi yozuv tekshiruvi)")
     print("=" * 80)
 
     start_time = time.time()
@@ -43,7 +33,7 @@ def run_pro_test():
     elapsed = time.time() - start_time
 
     if data is None:
-        print("❌ YIG'ISH MUVAFFASIYATSIZ — 3 urinishdan keyin ham sahifa/API olinmadi")
+        print("❌ YIG'ISH MUVAFFASIYATSIZ — sahifadan ma'lumot olinmadi")
         return
 
     certs = data.get("certificates", [])
@@ -71,13 +61,13 @@ def run_pro_test():
     print(json.dumps(first_cert, ensure_ascii=False, indent=2))
 
     print("\n" + "=" * 80)
-    print("🎉 TEST TUGADI. Loyiha mukammal ishlamoqda!")
+    print("🎉 TEST TUGADI")
     print("=" * 80)
 
 
 if __name__ == "__main__":
-    # Qo'shimcha anti-bot: testdan oldin env sozlamalari
-    os.environ.setdefault("CHROME_HEADLESS", "0")      # testda GUI ko'rsatish (anti-bot uchun yaxshiroq)
-    os.environ.setdefault("SKIP_WARMUP", "0")          # warmup majburiy
+    # Smoke test uchun defaultlar; .env qiymatlari bo'lsa o'sha ishlaydi.
+    os.environ.setdefault("CHROME_HEADLESS", "1")
+    os.environ.setdefault("SKIP_WARMUP", "1")
 
-    run_pro_test()
+    run_smoke_test()
